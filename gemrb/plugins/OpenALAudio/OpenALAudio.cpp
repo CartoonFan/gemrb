@@ -415,13 +415,13 @@ ALuint OpenALAudioDriver::loadSound(const char *ResRef, unsigned int &time_lengt
 		return 0;
 	}
 	int cnt = acm->get_length();
-	int riff_chans = acm->get_channels();
+	unsigned int riff_chans = acm->get_channels();
 	int samplerate = acm->get_samplerate();
 	//multiply always by 2 because it is in 16 bits
 	int rawsize = cnt * 2;
 	short* memory = (short*) malloc(rawsize);
 	//multiply always with 2 because it is in 16 bits
-	int cnt1 = acm->read_samples( memory, cnt ) * 2;
+	unsigned int cnt1 = acm->read_samples( memory, cnt ) * 2;
 	//Sound Length in milliseconds
 	time_length = ((cnt / riff_chans) * 1000) / samplerate;
 	//it is always reading the stuff into 16 bits
@@ -436,7 +436,7 @@ ALuint OpenALAudioDriver::loadSound(const char *ResRef, unsigned int &time_lengt
 
 	e = new CacheEntry;
 	e->Buffer = Buffer;
-	e->Length = ((cnt / riff_chans) * 1000) / samplerate;
+	e->Length = time_length;
 
 	buffercache.SetAt(ResRef, (void*)e);
 	//print("LoadSound: added %s to cache: %d. Cache size now %d", ResRef, e->Buffer, buffercache.GetCount());
@@ -588,8 +588,8 @@ bool OpenALAudioDriver::CanPlay()
 
 void OpenALAudioDriver::ResetMusics()
 {
+	SDL_mutexP(musicMutex);
 	MusicPlaying = false;
-	SDL_mutexP( musicMutex );
 	if (MusicSource && alIsSource(MusicSource)) {
 		alSourceStop(MusicSource);
 		checkALError("Unable to stop music source", WARNING);

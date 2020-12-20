@@ -1,12 +1,29 @@
-GemRB git (6193dc5a):
+GemRB git (7306dbe):
   New features:
     - 
-    - non-ascii data filename support
+    - SDLAudio caching
+    - PlayStation Vita port
 
   Improved features:
     - 
-    - iwd chargen
-    - audio, pst ini handling, savegame compatibility
+    - lightning bolts, iwd2 stealth, iwd effects, pst levelup
+    - scripting, demo data
+    - build system, portability and performance improvements
+    - externalized summoning limit, trap limit, narration text speed
+    - bugfixes
+
+GemRB v0.8.7 (2020-08-23):
+  New features:
+    - new smarter pathfinder with bumping support
+    - animal taming, iwd2 hardcoded saving throw bonuses
+    - vcpkg and out-of-the box msvc support
+    - non-ascii data filename support
+
+  Improved features:
+    - disk reading speedups, ease of setup
+    - iwd chargen, pst spell timing, hardcoded overlays, iwd2 casting ai
+    - better actor speeds & walk sounds
+    - audio, pst ini handling, savegame compatibility, morale handling
     - effects, projectiles, actions, range calculations
     - bugfixes
 

@@ -127,7 +127,7 @@ static int MagicBit = 0;
 
 Interface::Interface()
 {
-	Log(MESSAGE, "Core", "GemRB Core Version v%s Loading...", VERSION_GEMRB );
+	Log(MESSAGE, "Core", "GemRB core version v" VERSION_GEMRB " loading ...");
 
 	// default to the correct endianswitch
 	ieWord endiantest = 1;
@@ -197,8 +197,6 @@ Interface::Interface()
 #else
 	CaseSensitive = false;
 #endif
-	SkipIntroVideos = false;
-	DrawFPS = false;
 	TouchScrollAreas = false;
 	UseSoftKeyboard = false;
 	KeepCache = false;
@@ -269,6 +267,8 @@ Interface::Interface()
 #else // HAVE_ICONV
 	SystemEncoding = nullptr;
 #endif// HAVE_ICONV
+#elif defined(__MORPHOS__)
+	SystemEncoding = nullptr;
 #else // WIN32
 	SystemEncoding = nl_langinfo(CODESET);
 #endif // WIN32
@@ -937,7 +937,7 @@ bool Interface::ReadDamageTypeTable() {
 		di.value = strtol(tm->QueryField(i, 2), (char **) NULL, 16);
 		di.iwd_mod_type = atoi(tm->QueryField(i, 3));
 		di.reduction = atoi(tm->QueryField(i, 4));
-		DamageInfoMap.insert(std::make_pair ((ieDword)di.value, di));
+		DamageInfoMap.insert(std::make_pair(di.value, di));
 	}
 
 	return true;
@@ -1008,7 +1008,7 @@ void Interface::Main()
 
 	unsigned long frame = 0, time, timebase;
 	timebase = GetTickCount();
-	double frames = 0.0;
+	double frames;
 	Palette* palette = new Palette( ColorWhite, ColorBlack );
 	do {
 		//don't change script when quitting is pending
@@ -1077,7 +1077,7 @@ int Interface::LoadSprites()
 
 	Log(MESSAGE, "Core", "Loading Cursors...");
 	AnimationFactory* anim;
-	anim = (AnimationFactory*) gamedata->GetFactoryResource("cursors", IE_BAM_CLASS_ID);
+	anim = (AnimationFactory*) gamedata->GetFactoryResource(MainCursorsImage, IE_BAM_CLASS_ID);
 	if (anim)
 	{
 		CursorCount = anim->GetCycleCount();
@@ -1341,6 +1341,9 @@ int Interface::Init(InterfaceConfig* config)
 	CONFIG_INT("NumFingKboard", NumFingKboard = );
 	CONFIG_INT("NumFingInfo", NumFingInfo = );
 	CONFIG_INT("MouseFeedback", MouseFeedback = );
+	CONFIG_INT("GamepadPointerSpeed", GamepadPointerSpeed = );
+	CONFIG_INT("VitaKeepAspectRatio", VitaKeepAspectRatio = );
+	CONFIG_INT("Logging", Logging = );
 
 #undef CONFIG_INT
 
@@ -1400,12 +1403,12 @@ int Interface::Init(InterfaceConfig* config)
 #else
 	CONFIG_PATH("PluginsPath", PluginsPath, "");
 	if (!PluginsPath[0]) {
-		PathJoin( PluginsPath, GemRBPath, "plugins", NULL );
+		PathJoin(PluginsPath, GemRBPath, "plugins", nullptr);
 	}
 #endif
 
 	CONFIG_PATH("SavePath", SavePath, GamePath);
-#undef CONFIG_STRING
+#undef CONFIG_PATH
 
 #define CONFIG_STRING(key, var) \
 		value = config->GetValueForKey(key); \
@@ -1451,9 +1454,9 @@ int Interface::Init(InterfaceConfig* config)
 			// nothing in config so create our own
 			char name[_MAX_PATH];
 
-			PathJoin(name, GamePath, keyname, NULL);
+			PathJoin(name, GamePath, keyname, nullptr);
 			CD[i].push_back(name);
-			PathJoin(name, GamePath, GameDataPath, keyname, NULL);
+			PathJoin(name, GamePath, GameDataPath, keyname, nullptr);
 			CD[i].push_back(name);
 		}
 	}
@@ -1477,9 +1480,13 @@ int Interface::Init(InterfaceConfig* config)
 	char bundlePluginsPath[_MAX_PATH];
 	CopyBundlePath(bundlePluginsPath, sizeof(bundlePluginsPath), PLUGINS);
 	ResolveFilePath(bundlePluginsPath);
+#ifndef STATIC_LINK
 	LoadPlugins(bundlePluginsPath);
 #endif
+#endif
+#ifndef STATIC_LINK
 	LoadPlugins(PluginsPath);
+#endif
 	if (plugin && plugin->GetPluginCount()) {
 		Log(MESSAGE, "Core", "Plugin Loading Complete...");
 	} else {
@@ -1517,7 +1524,7 @@ int Interface::Init(InterfaceConfig* config)
 
 		char path[_MAX_PATH];
 
-		PathJoin( path, CachePath, NULL);
+		PathJoin(path, CachePath, nullptr);
 		if (!gamedata->AddSource(path, "Cache", PLUGIN_RESOURCE_DIRECTORY)) {
 			Log(FATAL, "Core", "The cache path couldn't be registered, please check!");
 			return GEM_ERROR;
@@ -1527,34 +1534,34 @@ int Interface::Init(InterfaceConfig* config)
 		for (i = 0; i < ModPath.size(); ++i)
 			gamedata->AddSource(ModPath[i].c_str(), "Mod paths", PLUGIN_RESOURCE_CACHEDDIRECTORY);
 
-		PathJoin( path, GemRBOverridePath, "override", GameType, NULL);
+		PathJoin(path, GemRBOverridePath, "override", GameType, nullptr);
 		if (!strcmp( GameType, "auto" ))
 			gamedata->AddSource(path, "GemRB Override", PLUGIN_RESOURCE_NULL);
 		else
 			gamedata->AddSource(path, "GemRB Override", PLUGIN_RESOURCE_CACHEDDIRECTORY);
 
-		PathJoin( path, GemRBOverridePath, "override", "shared", NULL);
+		PathJoin(path, GemRBOverridePath, "override", "shared", nullptr);
 		gamedata->AddSource(path, "shared GemRB Override", PLUGIN_RESOURCE_CACHEDDIRECTORY);
 
-		PathJoin( path, GamePath, GameOverridePath, NULL);
+		PathJoin(path, GamePath, GameOverridePath, nullptr);
 		gamedata->AddSource(path, "Override", PLUGIN_RESOURCE_CACHEDDIRECTORY);
 
 		//GAME sounds are intentionally not cached, in IWD there are directory structures,
 		//that are not cacheable, also it is totally pointless (this fixed charsounds in IWD)
-		PathJoin( path, GamePath, GameSoundsPath, NULL);
+		PathJoin(path, GamePath, GameSoundsPath, nullptr);
 		gamedata->AddSource(path, "Sounds", PLUGIN_RESOURCE_DIRECTORY);
 
-		PathJoin( path, GamePath, GameScriptsPath, NULL);
+		PathJoin(path, GamePath, GameScriptsPath, nullptr);
 		gamedata->AddSource(path, "Scripts", PLUGIN_RESOURCE_CACHEDDIRECTORY);
 
-		PathJoin( path, GamePath, GamePortraitsPath, NULL);
+		PathJoin(path, GamePath, GamePortraitsPath, nullptr);
 		gamedata->AddSource(path, "Portraits", PLUGIN_RESOURCE_CACHEDDIRECTORY);
 
-		PathJoin( path, GamePath, GameDataPath, NULL);
+		PathJoin(path, GamePath, GameDataPath, nullptr);
 		gamedata->AddSource(path, "Data", PLUGIN_RESOURCE_CACHEDDIRECTORY);
 
 		// accomodating silly installers that create a data/Data/.* structure
-		PathJoin( path, GamePath, GameDataPath, "Data", NULL);
+		PathJoin(path, GamePath, GameDataPath, "Data", nullptr);
 		gamedata->AddSource(path, "Data", PLUGIN_RESOURCE_CACHEDDIRECTORY);
 
 		//IWD2 movies are on the CD but not in the BIF
@@ -1562,7 +1569,7 @@ int Interface::Init(InterfaceConfig* config)
 		for (i = 0; i < MAX_CD; i++) {
 			for (size_t j=0;j<CD[i].size();j++) {
 				description[2]='1'+i;
-				PathJoin( path, CD[i][j].c_str(), GameDataPath, NULL);
+				PathJoin(path, CD[i][j].c_str(), GameDataPath, nullptr);
 				gamedata->AddSource(path, description, PLUGIN_RESOURCE_CACHEDDIRECTORY);
 			}
 		}
@@ -1570,20 +1577,20 @@ int Interface::Init(InterfaceConfig* config)
 
 		// most of the old gemrb override files can be found here,
 		// so they have a lower priority than the game files and can more easily be modded
-		PathJoin( path, GemRBUnhardcodedPath, "unhardcoded", GameType, NULL);
+		PathJoin(path, GemRBUnhardcodedPath, "unhardcoded", GameType, nullptr);
 		if (!strcmp(GameType, "auto")) {
 			gamedata->AddSource(path, "GemRB Unhardcoded data", PLUGIN_RESOURCE_NULL);
 		} else {
 			gamedata->AddSource(path, "GemRB Unhardcoded data", PLUGIN_RESOURCE_CACHEDDIRECTORY);
 		}
-		PathJoin( path, GemRBUnhardcodedPath, "unhardcoded", "shared", NULL);
+		PathJoin(path, GemRBUnhardcodedPath, "unhardcoded", "shared", nullptr);
 		gamedata->AddSource(path, "shared GemRB Unhardcoded data", PLUGIN_RESOURCE_CACHEDDIRECTORY);
 	}
 
 	{
 		Log(MESSAGE, "Core", "Initializing KEY Importer...");
 		char ChitinPath[_MAX_PATH];
-		PathJoin( ChitinPath, GamePath, "chitin.key", NULL );
+		PathJoin(ChitinPath, GamePath, "chitin.key", nullptr);
 		if (!gamedata->AddSource(ChitinPath, "chitin.key", PLUGIN_RESOURCE_KEY)) {
 			Log(FATAL, "Core", "Failed to load \"chitin.key\"");
 			Log(ERROR, "Core", "This means you set the GamePath config variable incorrectly or that the game is running (Windows only).");
@@ -1606,10 +1613,10 @@ int Interface::Init(InterfaceConfig* config)
 
 	// re-set the gemrb override path, since we now have the correct GameType if 'auto' was used
 	char path[_MAX_PATH];
-	PathJoin(path, GemRBOverridePath, "override", GameType, NULL);
+	PathJoin(path, GemRBOverridePath, "override", GameType, nullptr);
 	gamedata->AddSource(path, "GemRB Override", PLUGIN_RESOURCE_CACHEDDIRECTORY, RM_REPLACE_SAME_SOURCE);
 	char unhardcodedTypePath[_MAX_PATH * 2];
-	PathJoin(unhardcodedTypePath, GemRBUnhardcodedPath, "unhardcoded", GameType, NULL);
+	PathJoin(unhardcodedTypePath, GemRBUnhardcodedPath, "unhardcoded", GameType, nullptr);
 	gamedata->AddSource(unhardcodedTypePath, "GemRB Unhardcoded data", PLUGIN_RESOURCE_CACHEDDIRECTORY, RM_REPLACE_SAME_SOURCE);
 
 	// fix the sample config default resolution for iwd2
@@ -1662,15 +1669,15 @@ int Interface::Init(InterfaceConfig* config)
 	char gemrbINI[_MAX_PATH+4] = { '\0' };
 	char tmp[_MAX_PATH+4] = { '\0' };
 	snprintf(gemrbINI, sizeof(gemrbINI), "gem-%s", INIConfig);
-	PathJoin(ini_path, SavePath, gemrbINI, NULL);
+	PathJoin(ini_path, SavePath, gemrbINI, nullptr);
 	if (!file_exists(ini_path)) {
-		PathJoin(ini_path, GamePath, gemrbINI, NULL);
+		PathJoin(ini_path, GamePath, gemrbINI, nullptr);
 	}
 	if (file_exists(ini_path)) {
 		strlcpy(tmp, INIConfig, sizeof(tmp));
 		strlcpy(INIConfig, gemrbINI, sizeof(INIConfig));
 	} else if (!IgnoreOriginalINI) {
-		PathJoin( ini_path, GamePath, INIConfig, NULL );
+		PathJoin(ini_path, GamePath, INIConfig, nullptr);
 		Log(MESSAGE,"Core", "Loading original game options from %s", ini_path);
 	}
 	if (!InitializeVarsWithINI(ini_path)) {
@@ -1708,7 +1715,7 @@ int Interface::Init(InterfaceConfig* config)
 	strings = PluginHolder<StringMgr>(IE_TLK_CLASS_ID);
 	Log(MESSAGE, "Core", "Loading Dialog.tlk file...");
 	char strpath[_MAX_PATH];
-	PathJoin(strpath, GamePath, "dialog.tlk", NULL);
+	PathJoin(strpath, GamePath, "dialog.tlk", nullptr);
 	FileStream* fs = FileStream::OpenFile(strpath);
 	if (!fs) {
 		Log(FATAL, "Core", "Cannot find Dialog.tlk.");
@@ -1721,7 +1728,7 @@ int Interface::Init(InterfaceConfig* config)
 		strings2 = PluginHolder<StringMgr>(IE_TLK_CLASS_ID);
 		Log(MESSAGE, "Core", "Loading DialogF.tlk file...");
 		char strpath[_MAX_PATH];
-		PathJoin(strpath, GamePath, "dialogf.tlk", NULL);
+		PathJoin(strpath, GamePath, "dialogf.tlk", nullptr);
 		FileStream* fs = FileStream::OpenFile(strpath);
 		if (!fs) {
 			Log(ERROR, "Core", "Cannot find DialogF.tlk. Let us know which translation you are using.");
@@ -1850,7 +1857,7 @@ int Interface::Init(InterfaceConfig* config)
 		Log(MESSAGE, "Core", "Loading precreated teams setup...");
 		INIparty = PluginHolder<DataFileMgr>(IE_INI_CLASS_ID);
 		char tINIparty[_MAX_PATH];
-		PathJoin( tINIparty, GamePath, "Party.ini", NULL );
+		PathJoin(tINIparty, GamePath, "Party.ini", nullptr);
 		FileStream* fs = FileStream::OpenFile( tINIparty );
 		if (!INIparty->Open(fs)) {
 			Log(WARNING, "Core", "Failed to load precreated teams.");
@@ -1865,8 +1872,7 @@ int Interface::Init(InterfaceConfig* config)
 		Log(MESSAGE, "Core", "Loading beasts definition File...");
 		INIbeasts = PluginHolder<DataFileMgr>(IE_INI_CLASS_ID);
 		char tINIbeasts[_MAX_PATH];
-		PathJoin( tINIbeasts, GamePath, "beast.ini", NULL );
-		// FIXME: crashes if file does not open
+		PathJoin(tINIbeasts, GamePath, "beast.ini", nullptr);
 		FileStream* fs = FileStream::OpenFile( tINIbeasts );
 		if (!INIbeasts->Open(fs)) {
 			Log(WARNING, "Core", "Failed to load beast definitions.");
@@ -1875,8 +1881,7 @@ int Interface::Init(InterfaceConfig* config)
 		Log(MESSAGE, "Core", "Loading quests definition File...");
 		INIquests = PluginHolder<DataFileMgr>(IE_INI_CLASS_ID);
 		char tINIquests[_MAX_PATH];
-		PathJoin( tINIquests, GamePath, "quests.ini", NULL );
-		// FIXME: crashes if file does not open
+		PathJoin(tINIquests, GamePath, "quests.ini", nullptr);
 		FileStream* fs2 = FileStream::OpenFile( tINIquests );
 		if (!INIquests->Open(fs2)) {
 			Log(WARNING, "Core", "Failed to load quest definitions.");
@@ -1993,13 +1998,14 @@ int Interface::Init(InterfaceConfig* config)
 	}
 #endif
 	snprintf(pathString, sizeof(pathString), "GemRB_Data_Path = %s", unhardcodedTypePath);
-	PathJoin(strpath, GamePath, "gemrb_path.txt", NULL);
+	PathJoin(strpath, GamePath, "gemrb_path.txt", nullptr);
 	FileStream *pathFile = new FileStream();
 	// don't abort if something goes wrong, since it should never happen and it's not critical
 	if (pathFile->Create(strpath)) {
 		pathFile->Write(pathString, strlen(pathString));
 		pathFile->Close();
 	}
+	delete pathFile;
 	return GEM_OK;
 }
 
@@ -2155,7 +2161,7 @@ const char* Interface::TypeExt(SClass_ID type) const
 			return "wmp";
 
 		default:
-			Log(ERROR, "Interface", "No extension associated to class ID: %lu", (unsigned long) type );
+			Log(ERROR, "Interface", "No extension associated to class ID: %lu", type);
 	}
 	return NULL;
 }
@@ -2332,7 +2338,8 @@ bool Interface::LoadGemRBINI()
 	s = ini->GetKeyAsString( "resources", name, NULL ); \
 	resref = s; s = NULL;
 
-	ASSIGN_RESREF(CursorBam, "CursorBAM"); //console cursor
+	ASSIGN_RESREF(MainCursorsImage, "MainCursorsImage");
+	ASSIGN_RESREF(TextCursorBam, "TextCursorBAM"); //console cursor
 	ASSIGN_RESREF(ScrollCursorBam, "ScrollCursorBAM");
 	ASSIGN_RESREF(ButtonFontResRef, "ButtonFont");
 	ASSIGN_RESREF(TooltipFontResRef, "TooltipFont");
@@ -2349,6 +2356,10 @@ bool Interface::LoadGemRBINI()
 	Actor::SetFistStat(ini->GetKeyAsInt( "resources", "FistStat", IE_CLASS));
 
 	TooltipMargin = ini->GetKeyAsInt( "resources", "TooltipMargin", TooltipMargin );
+	// These are values for how long a single step is, see Movable::DoStep.
+	// They were found via trial-and-error, trying to match
+	// the speeds from the original games.
+	gamedata->SetStepTime(ini->GetKeyAsInt("resources", "StepTime", 566)); // Defaults to BG2's value
 
 	// The format of GroundCircle can be:
 	// GroundCircleBAM1 = wmpickl/3
@@ -2409,7 +2420,7 @@ bool Interface::LoadEncoding()
 
 	// TODO: lists are incomplete
 	// maybe want to externalize this
-	// list compiled form wiki: http://www.gemrb.org/wiki/doku.php?id=engine:encodings
+	// list compiled form wiki: https://gemrb.org/Text-encodings.html
 	const char* wideEncodings[] = {
 		// Chinese
 		"GBK", "BIG5",
@@ -2531,10 +2542,8 @@ Actor *Interface::SummonCreature(const ieResRef resource, const ieResRef vvcres,
 	//maximum number of monsters summoned
 	int cnt=10;
 	Actor * ab = NULL;
+	const Actor *summoner = nullptr;
 
-	//TODO:
-	//decrease the number of summoned creatures with the number of already summoned creatures here
-	//the summoned creatures have a special IE_SEX
 	Map *map;
 	if (target) {
 		map = target->GetCurrentArea();
@@ -2545,21 +2554,14 @@ Actor *Interface::SummonCreature(const ieResRef resource, const ieResRef vvcres,
 	}
 	if (!map) return ab;
 
+	if (Owner && Owner->Type == ST_ACTOR) {
+		summoner = (Actor *) Owner;
+	}
+
 	while (cnt--) {
 		Actor *tmp = gamedata->GetCreature(resource);
 		if (!tmp) {
 			return NULL;
-		}
-		ieDword sex = tmp->GetStat(IE_SEX);
-		//TODO: make this external as summlimt.2da
-		int limit = 0;
-		switch (sex) {
-		case SEX_SUMMON: case SEX_SUMMON_DEMON:
-			limit = 5;
-			break;
-		case SEX_BOTH:
-			limit = 1;
-			break;
 		}
 
 		//if summoner is an actor, filter out opponent summons
@@ -2567,10 +2569,9 @@ Actor *Interface::SummonCreature(const ieResRef resource, const ieResRef vvcres,
 		//non actors and neutrals can summon as much as they want
 		ieDword flag = GA_NO_DEAD|GA_NO_ALLY|GA_NO_ENEMY;
 
-		if (Owner && Owner->Type==ST_ACTOR) {
+		if (summoner) {
 			tmp->LastSummoner = Owner->GetGlobalID();
-			Actor *owner = (Actor *) Owner;
-			ieDword ea = owner->GetStat(IE_EA);
+			ieDword ea = summoner->GetStat(IE_EA);
 			if (ea<=EA_GOODCUTOFF) {
 				flag &= ~GA_NO_ALLY;
 			} else if (ea>=EA_EVILCUTOFF) {
@@ -2578,7 +2579,17 @@ Actor *Interface::SummonCreature(const ieResRef resource, const ieResRef vvcres,
 			}
 		}
 
-		if (limit && sexmod && map->CountSummons(flag, sex)>=limit) {
+		// mark the summon, but only if they don't have a special sex already
+		if (sexmod && tmp->BaseStats[IE_SEX] < SEX_EXTRA && tmp->BaseStats[IE_SEX] != SEX_ILLUSION) {
+			tmp->SetBase(IE_SEX, SEX_SUMMON);
+		}
+
+		// only allow up to the summoning limit of new summoned creatures
+		// the summoned creatures have a special IE_SEX
+		// but also only limit the party, so spore colonies can reproduce more
+		ieDword sex = tmp->GetStat(IE_SEX);
+		int limit = gamedata->GetSummoningLimit(sex);
+		if (limit && sexmod && map->CountSummons(flag, sex) >= limit && summoner && summoner->InParty) {
 			//summoning limit reached
 			displaymsg->DisplayConstantString(STR_SUMMONINGLIMIT, DMC_WHITE);
 			delete tmp;
@@ -2591,8 +2602,8 @@ Actor *Interface::SummonCreature(const ieResRef resource, const ieResRef vvcres,
 		int enemyally;
 
 		if (eamod==EAM_SOURCEALLY || eamod==EAM_SOURCEENEMY) {
-			if (Owner && Owner->Type==ST_ACTOR) {
-				enemyally = ((Actor *) Owner)->GetStat(IE_EA)>EA_GOODCUTOFF;
+			if (summoner) {
+				enemyally = summoner->GetStat(IE_EA) > EA_GOODCUTOFF;
 			} else {
 				enemyally = true;
 			}
@@ -2628,22 +2639,22 @@ Actor *Interface::SummonCreature(const ieResRef resource, const ieResRef vvcres,
 			break;
 		}
 
-		// mark the summon, but only if they don't have a special sex already
-		if (sexmod && ab->BaseStats[IE_SEX] < SEX_EXTRA && ab->BaseStats[IE_SEX] != SEX_ILLUSION) {
-			ab->SetBase(IE_SEX, SEX_SUMMON);
-		}
-
 		map->AddActor(ab, true);
 		ab->SetPosition(position, true, 0);
 		ab->RefreshEffects(NULL);
+
+		// guessing, since this trigger was unused in the originals — likely duplicating LastSummoner
+		if (Owner) {
+			Owner->AddTrigger(TriggerEntry(trigger_summoned, ab->GetGlobalID()));
+		}
 
 		if (vvcres[0]) {
 			ScriptedAnimation* vvc = gamedata->GetScriptedAnimation(vvcres, false);
 			if (vvc) {
 				//This is the final position of the summoned creature
 				//not the original target point
-				vvc->XPos=ab->Pos.x;
-				vvc->YPos=ab->Pos.y;
+				vvc->XPos += ab->Pos.x;
+				vvc->YPos += ab->Pos.y;
 				//force vvc to play only once
 				vvc->PlayOnce();
 				map->AddVVCell( new VEFObject(vvc) );
@@ -3646,9 +3657,11 @@ DirectoryIterator Interface::GetResourceDirectory(RESOURCE_DIRECTORY dir)
 			filter = new ExtFilter("BS");
 			filter = new OrPredicate<const char*>(filter, new ExtFilter("BCS"));
 			break;
+		default:
+			error("Interface", "Uknown resource directory type: %d!", dir);
 	}
 
-	PathJoin( Path, GamePath, resourcePath, NULL );
+	PathJoin(Path, GamePath, resourcePath, nullptr);
 	DirectoryIterator dirIt(Path);
 	dirIt.SetFilterPredicate(filter);
 	return dirIt;
@@ -3736,10 +3749,10 @@ bool Interface::SaveConfig()
 	if (strncmp(INIConfig, "gem-", 4)) {
 		snprintf(gemrbINI, sizeof(gemrbINI), "gem-%s", INIConfig);
 	}
-	PathJoin(ini_path, GamePath, gemrbINI, NULL);
+	PathJoin(ini_path, GamePath, gemrbINI, nullptr);
 	FileStream *fs = new FileStream();
 	if (!fs->Create(ini_path)) {
-		PathJoin(ini_path, SavePath, gemrbINI, NULL);
+		PathJoin(ini_path, SavePath, gemrbINI, nullptr);
 		if (!fs->Create(ini_path)) {
 			return false;
 		}
@@ -3807,7 +3820,7 @@ void Interface::SetCutSceneMode(bool active)
 /** returns true if in dialogue or cutscene */
 bool Interface::InCutSceneMode() const
 {
-	GameControl *gc = GetGameControl();
+	const GameControl *gc = GetGameControl();
 	if (!gc || (gc->GetDialogueFlags()&DF_IN_DIALOG) || (gc->GetScreenFlags()&(SF_DISABLEMOUSE|SF_CUTSCENE))) {
 		return true;
 	}
@@ -4123,7 +4136,7 @@ bool Interface::InitItemTypes()
 				k <<= 1;
 			}
 			//we let any items in the inventory
-			slotmatrix[i] = (ieDword) value | SLOT_INVENTORY;
+			slotmatrix[i] = value | SLOT_INVENTORY;
 		}
 	}
 
@@ -4838,7 +4851,7 @@ bool Interface::ResolveRandomItem(CREItem *itm)
 			i=Roll(1,itemlist->Count,-1);
 		}
 		strnlwrcpy( NewItem, itemlist->ResRefs[i], 8);
-		char *p=(char *) strchr(NewItem,'*');
+		char *p = strchr(NewItem, '*');
 		if (p) {
 			*p=0; //doing this so endptr is ok
 			k=strtol(p+1,NULL,10);
@@ -4984,6 +4997,8 @@ ieStrRef Interface::GetRumour(const ieResRef dlgref)
 	}
 	Scriptable *pc = game->GetSelectedPCSingle(false);
 
+	// forcefully rerandomize
+	RandomNumValue = RAND_ALL();
 	ieStrRef ret = (ieStrRef) -1;
 	int i = dlg->FindRandomState( pc );
 	if (i>=0 ) {
@@ -5034,7 +5049,7 @@ Actor *Interface::GetFirstSelectedActor()
 //this is used only for the console
 Sprite2D *Interface::GetCursorSprite()
 {
-	Sprite2D *spr = gamedata->GetBAMSprite(CursorBam, 0, 0);
+	Sprite2D *spr = gamedata->GetBAMSprite(TextCursorBam, 0, 0);
 	if (spr)
 	{
 		if(HasFeature(GF_OVERRIDE_CURSORPOS))
@@ -5200,7 +5215,7 @@ int Interface::WriteCharacter(const char *name, Actor *actor)
 {
 	char Path[_MAX_PATH];
 
-	PathJoin( Path, GamePath, GameCharactersPath, NULL );
+	PathJoin(Path, GamePath, GameCharactersPath, nullptr);
 	if (!actor) {
 		return -1;
 	}
@@ -5458,7 +5473,7 @@ int Interface::GetReputationMod(int column) const
 
 PauseSetting Interface::TogglePause()
 {
-	GameControl *gc = GetGameControl();
+	const GameControl *gc = GetGameControl();
 	if (!gc) return PAUSE_OFF;
 	PauseSetting pause = (PauseSetting)(~gc->GetDialogueFlags()&DF_FREEZE_SCRIPTS);
 	if (SetPause(pause)) return pause;
@@ -5495,7 +5510,7 @@ bool Interface::Autopause(ieDword flag, Scriptable* target)
 	ieDword autopause_flags = 0;
 	vars->Lookup("Auto Pause State", autopause_flags);
 
-	if ((autopause_flags & (1<<flag))) {
+	if (autopause_flags & (1<<flag)) {
 		if (SetPause(PAUSE_ON, PF_QUIET)) {
 			displaymsg->DisplayConstantString(STR_AP_UNUSABLE+flag, DMC_RED);
 
@@ -5665,7 +5680,7 @@ void Interface::WaitForDisc(int disc_number, const char* path)
 		for (size_t i=0;i<CD[disc_number-1].size();i++) {
 			char name[_MAX_PATH];
 
-			PathJoin(name, CD[disc_number-1][i].c_str(),path,NULL);
+			PathJoin(name, CD[disc_number-1][i].c_str(), path, nullptr);
 			if (file_exists (name)) {
 				GetGUIScriptEngine()->RunFunction( "GUICommonWindows", "OpenWaitForDiscWindow" );
 				return;

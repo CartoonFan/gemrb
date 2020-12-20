@@ -79,15 +79,23 @@ unsigned char GetOrient(const Point &s, const Point &d)
 }
 
 /** Calculates distance between 2 points */
-unsigned int Distance(Point p, Point q)
+unsigned int Distance(const Point &p, const Point &q)
 {
 	long x = ( p.x - q.x );
 	long y = ( p.y - q.y );
 	return (unsigned int) std::sqrt( ( double ) ( x* x + y* y ) );
 }
 
+/** Calculates squared distance between 2 points */
+unsigned int SquaredDistance(const Point &p, const Point &q)
+{
+	long x = p.x - q.x;
+	long y = p.y - q.y;
+	return x * x + y * y;
+}
+
 /** Calculates distance squared from a point to a scriptable */
-unsigned int SquaredMapDistance(Point p, const Scriptable *b)
+unsigned int SquaredMapDistance(const Point &p, const Scriptable *b)
 {
 	long x = ( p.x/16 - b->Pos.x/16 );
 	long y = ( p.y/12 - b->Pos.y/12 );
@@ -95,32 +103,32 @@ unsigned int SquaredMapDistance(Point p, const Scriptable *b)
 }
 
 /** Calculates distance between 2 points */
-unsigned int Distance(Point p, const Scriptable *b)
+unsigned int Distance(const Point &p, const Scriptable *b)
 {
 	long x = ( p.x - b->Pos.x );
 	long y = ( p.y - b->Pos.y );
 	return (unsigned int) std::sqrt( ( double ) ( x* x + y* y ) );
 }
 
-unsigned int PersonalDistance(Point p, const Scriptable *b)
+unsigned int PersonalDistance(const Point &p, const Scriptable *b)
 {
 	long x = ( p.x - b->Pos.x );
 	long y = ( p.y - b->Pos.y );
 	int ret = (int) std::sqrt( ( double ) ( x* x + y* y ) );
 	if (b->Type==ST_ACTOR) {
-		ret-=((Actor *)b)->size*10;
+		ret -= ((const Actor *) b)->size * 10;
 	}
 	if (ret<0) return (unsigned int) 0;
 	return (unsigned int) ret;
 }
 
-unsigned int SquaredPersonalDistance(Point p, const Scriptable *b)
+unsigned int SquaredPersonalDistance(const Point &p, const Scriptable *b)
 {
 	long x = ( p.x - b->Pos.x );
 	long y = ( p.y - b->Pos.y );
 	int ret =  x*x + y*y;
 	if (b->Type==ST_ACTOR) {
-		ret-=((Actor *)b)->size*100;
+		ret -= ((const Actor *) b)->size * 100;
 	}
 	if (ret<0) return (unsigned int) 0;
 	return (unsigned int) ret;
@@ -145,9 +153,7 @@ unsigned int Distance(const Scriptable *a, const Scriptable *b)
 /** Calculates distance squared between 2 scriptables */
 unsigned int SquaredDistance(const Scriptable *a, const Scriptable *b)
 {
-	long x = ( a->Pos.x - b->Pos.x );
-	long y = ( a->Pos.y - b->Pos.y );
-	return (unsigned int) ( x* x + y* y );
+	return SquaredDistance(a->Pos, b->Pos);
 }
 
 /** Calculates distance between 2 scriptables, including feet circle if applicable */
@@ -157,10 +163,10 @@ unsigned int PersonalDistance(const Scriptable *a, const Scriptable *b)
 	long y = ( a->Pos.y - b->Pos.y );
 	int ret = (int) std::sqrt( ( double ) ( x* x + y* y ) );
 	if (a->Type==ST_ACTOR) {
-		ret-=((Actor *)a)->size*10;
+		ret -= ((const Actor *) a)->size * 10;
 	}
 	if (b->Type==ST_ACTOR) {
-		ret-=((Actor *)b)->size*10;
+		ret -= ((const Actor *) b)->size * 10;
 	}
 	if (ret<0) return (unsigned int) 0;
 	return (unsigned int) ret;
@@ -172,13 +178,43 @@ unsigned int SquaredPersonalDistance(const Scriptable *a, const Scriptable *b)
 	long y = ( a->Pos.y - b->Pos.y );
 	int ret =  x*x + y*y;
 	if (a->Type==ST_ACTOR) {
-		ret-=((Actor *)a)->size*100;
+		ret -= ((const Actor *) a)->size * 100;
 	}
 	if (b->Type==ST_ACTOR) {
-		ret-=((Actor *)b)->size*100;
+		ret -= ((const Actor *) b)->size * 100;
 	}
 	if (ret<0) return (unsigned int) 0;
 	return (unsigned int) ret;
+}
+
+unsigned int PersonalLineDistance(const Point &v, const Point &w, const Scriptable *s, double *proj) {
+	double t;
+	Point p;
+
+	int len = SquaredDistance(w, v);
+	if (len == 0) {
+		// that's a short line...
+		t = 0.0;
+		p = v;
+	} else {
+		// find the projection of Pos onto the line
+		t = ((s->Pos.x - v.x) * (w.x - v.x) + (s->Pos.y - v.y) * (w.y - v.y)) / (double) len;
+		if (t < 0.0) {
+			// projection beyond the v end of the line
+			p = v;
+		} else if (t > 1.0) {
+			// projection beyond the w end of the line
+			p = w;
+		} else {
+			// projection on the line
+			p = Point(short(v.x + (w.x - v.x) * t), short(v.y + (w.y - v.y) * t));
+		}
+	}
+
+	if (proj != NULL) {
+		(*proj) = t;
+	}
+	return PersonalDistance(p, s);
 }
 
 // What's the deal with the spell and item ranges in their descriptions being in feet?
@@ -236,7 +272,7 @@ bool WithinRange(const Actor *actor, const Point &dest, int distance)
 	return Distance(dest, actor) <= Feet2Pixels(distance, angle);
 }
 
-bool WithinPersonalRange(const Actor *actor, const Scriptable *dest, int distance)
+bool WithinPersonalRange(const Scriptable *actor, const Scriptable *dest, int distance)
 {
 	double angle = atan2(actor->Pos.y - dest->Pos.y, actor->Pos.x - dest->Pos.x);
 	return PersonalDistance(dest, actor) <= Feet2Pixels(distance, angle);
@@ -249,7 +285,7 @@ int EARelation(const Scriptable* Owner, const Actor* target)
 	ieDword eao = EA_ENEMY;
 
 	if (Owner && Owner->Type==ST_ACTOR) {
-		eao = ((Actor *) Owner)->GetStat(IE_EA);
+		eao = ((const Actor *) Owner)->GetStat(IE_EA);
 	}
 
 	ieDword eat = target->GetStat(IE_EA);

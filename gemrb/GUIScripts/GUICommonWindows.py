@@ -1011,6 +1011,8 @@ def ActionTurnPressed ():
 	return
 
 def ActionTamingPressed ():
+	pc = GemRB.GameGetFirstSelectedActor ()
+	GemRB.SpellCast (pc, -3, 0, "spin108")
 	GemRB.SetVar ("ActionLevel", UAW_STANDARD)
 	UpdateActionsWindow ()
 	return
@@ -1722,7 +1724,7 @@ def UpdateAnimatedPortrait (Window,i):
 	Button.SetAnimation (pic, cycle)
 	ButtonHP.SetFlags(IE_GUI_BUTTON_PICTURE, OP_SET)
 
-	if hp_max < 1 or hp is "?":
+	if hp_max < 1 or hp == "?":
 		ratio = 0.0
 	else:
 		ratio = (hp + 0.0) / hp_max
@@ -2106,6 +2108,25 @@ def RealRestPress ():
 			GemRB.DisplayString (info["ErrorMsg"], 0xff0000)
 
 	return
+
+# special pst death screen for the finale
+def OpenPSTDeathWindow ():
+	if not GameCheck.IsPST ():
+		return
+
+	def ShowCredits():
+		GemRB.ExecuteString ("EndCredits()")
+		# will also exit to the main menu
+
+	# reuse the main error window
+	GemRB.LoadWindowPack (GUICommon.GetWindowPack())
+	Window = GemRB.LoadWindow (25)
+	Label = Window.GetControl (0xfffffff) # -1 in the CHU
+	Label.SetText (48155)
+	Button = Window.GetControl (1)
+	Button.SetText (1403)
+	Button.SetEvent (IE_GUI_BUTTON_ON_PRESS, ShowCredits)
+	Window.ShowModal (MODAL_SHADOW_GRAY)
 
 def SwitchPCByKey (wIdx, key, mod):
 	if key >= 49 and key <= 54:

@@ -138,7 +138,7 @@ Game* GAMImporter::LoadGame(Game *newGame, int ver_override)
 	}
 	str->ReadDword( &newGame->PartyGold );
 	//npc count in party???
-	str->ReadWord( &newGame->NpcInParty );  //in ToB this is named 'nPCAreaViewed'
+	str->ReadWord( &newGame->NPCAreaViewed ); //in ToB this is named 'nPCAreaViewed'
 	str->ReadWord( &newGame->WeatherBits );
 	str->ReadDword( &PCOffset );
 	str->ReadDword( &PCCount );
@@ -169,6 +169,7 @@ Game* GAMImporter::LoadGame(Game *newGame, int ver_override)
 			str->ReadDword( &PPLocOffset );
 			str->ReadDword( &PPLocCount );
 			str->Seek( 52, GEM_CURRENT_POS);
+			// TODO: EEs used up these bits, see https://gibberlings3.github.io/iesdp/file_formats/ie_formats/gam_v2.0.htm#GAMEV2_0_Header
 			break;
 
 		case GAM_VER_PST:
@@ -294,7 +295,6 @@ Game* GAMImporter::LoadGame(Game *newGame, int ver_override)
 		}
 	}
 
-	//TODO: these need to be corrected!
 	if (SavedLocCount && SavedLocOffset) {
 		ieWord PosX, PosY;
 
@@ -690,10 +690,10 @@ int GAMImporter::GetStoredFileSize(Game *game)
 	return headersize + PPLocCount * 12;
 }
 
-int GAMImporter::PutJournals(DataStream *stream, Game *game)
+int GAMImporter::PutJournals(DataStream *stream, const Game *game)
 {
 	for (unsigned int i=0;i<JournalCount;i++) {
-		GAMJournalEntry *j = game->GetJournalEntry(i);
+		const GAMJournalEntry *j = game->GetJournalEntry(i);
 
 		stream->WriteDword( &j->Text );
 		stream->WriteDword( &j->GameTime );
@@ -750,7 +750,7 @@ int GAMImporter::PutPlaneLocations(DataStream *stream, Game *game)
 }
 
 //only in PST
-int GAMImporter::PutKillVars(DataStream *stream, Game *game)
+int GAMImporter::PutKillVars(DataStream *stream, const Game *game)
 {
 	char filling[40];
 	ieVariable tmpname;
@@ -772,7 +772,7 @@ int GAMImporter::PutKillVars(DataStream *stream, Game *game)
 	return 0;
 }
 
-int GAMImporter::PutVariables(DataStream *stream, Game *game)
+int GAMImporter::PutVariables(DataStream *stream, const Game *game)
 {
 	char filling[40];
 	ieVariable tmpname;
@@ -837,9 +837,9 @@ int GAMImporter::PutHeader(DataStream *stream, Game *game)
 		}
 	}
 	stream->WriteDword( &game->PartyGold );
-	//hack because we don't need this
-	game->NpcInParty=PCCount-1;
-	stream->WriteWord( &game->NpcInParty );
+	// we don't need this field, since you can only save if everyone is in the same area
+	game->NPCAreaViewed = PCCount - 1;
+	stream->WriteWord( &game->NPCAreaViewed );
 	stream->WriteWord( &game->WeatherBits );
 	stream->WriteDword( &PCOffset );
 	stream->WriteDword( &PCCount );
@@ -962,7 +962,7 @@ int GAMImporter::PutActor(DataStream *stream, Actor *ac, ieDword CRESize, ieDwor
 	//quickspells
 	if (version==GAM_VER_IWD2 || version==GAM_VER_GEMRB) {
 		for (i=0;i<MAX_QSLOTS;i++) {
-			if ( (ieByte) ac->PCStats->QuickSpellClass[i]>=0xfe) {
+			if (ac->PCStats->QuickSpellClass[i] >= 0xfe) {
 				stream->Write(filling,8);
 			} else {
 				stream->Write(ac->PCStats->QuickSpells[i],8);
@@ -1009,14 +1009,14 @@ int GAMImporter::PutActor(DataStream *stream, Actor *ac, ieDword CRESize, ieDwor
 	//innates, bard songs and quick slots are saved only in iwd2
 	if (version==GAM_VER_IWD2 || version==GAM_VER_GEMRB) {
 		for (i=0;i<MAX_QSLOTS;i++) {
-			if ( (ieByte) ac->PCStats->QuickSpellClass[i]==0xff) {
+			if (ac->PCStats->QuickSpellClass[i] == 0xff) {
 				stream->Write(ac->PCStats->QuickSpells[i],8);
 			} else {
 				stream->Write(filling,8);
 			}
 		}
 		for (i=0;i<MAX_QSLOTS;i++) {
-			if ((ieByte) ac->PCStats->QuickSpellClass[i]==0xfe) {
+			if (ac->PCStats->QuickSpellClass[i] == 0xfe) {
 				stream->Write(ac->PCStats->QuickSpells[i],8);
 			} else {
 				stream->Write(filling,8);
@@ -1075,7 +1075,7 @@ int GAMImporter::PutActor(DataStream *stream, Actor *ac, ieDword CRESize, ieDwor
 	return 0;
 }
 
-int GAMImporter::PutPCs(DataStream *stream, Game *game)
+int GAMImporter::PutPCs(DataStream *stream, const Game *game)
 {
 	unsigned int i;
 	PluginHolder<ActorMgr> am(IE_CRE_CLASS_ID);
@@ -1103,7 +1103,7 @@ int GAMImporter::PutPCs(DataStream *stream, Game *game)
 	return 0;
 }
 
-int GAMImporter::PutNPCs(DataStream *stream, Game *game)
+int GAMImporter::PutNPCs(DataStream *stream, const Game *game)
 {
 	unsigned int i;
 	PluginHolder<ActorMgr> am(IE_CRE_CLASS_ID);
@@ -1193,7 +1193,7 @@ void GAMImporter::PutMazeEntry(DataStream *stream, void *memory)
 	stream->WriteDword( &h->visited );
 }
 
-int GAMImporter::PutMaze(DataStream *stream, Game *game)
+int GAMImporter::PutMaze(DataStream *stream, const Game *game)
 {
 	for(int i=0;i<MAZE_ENTRY_COUNT;i++) {
 		PutMazeEntry(stream, game->mazedata+i*MAZE_ENTRY_SIZE);

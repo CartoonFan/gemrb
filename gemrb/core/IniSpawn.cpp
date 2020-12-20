@@ -31,6 +31,7 @@
 #include "Interface.h"
 #include "Map.h"
 #include "PluginMgr.h"
+#include "ScriptEngine.h"
 #include "GameScript/GSUtils.h"
 #include "GameScript/Matching.h"
 #include "GUI/GameControl.h"
@@ -279,29 +280,19 @@ void IniSpawn::ReadCreature(DataFileMgr *inifile, const char *crittername, Critt
 			}
 		}
 		//parse the selected spawnpoint
-		int x,y,o;
-		if (sscanf(s,"[%d,%d:%d]", &x, &y, &o)==3) {
-			critter.SpawnPoint.x=(short) x;
-			critter.SpawnPoint.y=(short) y;
-			critter.Orientation=o;
-		} else
-		if (sscanf(s,"[%d.%d:%d]", &x, &y, &o)==3) {
-			critter.SpawnPoint.x=(short) x;
-			critter.SpawnPoint.y=(short) y;
-			critter.Orientation=o;
-		} else
-		if (sscanf(s,"[%d,%d]", &x, &y)==2) {
-			critter.SpawnPoint.x=(short) x;
-			critter.SpawnPoint.y=(short) y;
-			critter.Orientation=core->Roll(1,16,-1);
-		} else
-		if (sscanf(s,"[%d.%d]", &x, &y)==2) {
-			critter.SpawnPoint.x=(short) x;
-			critter.SpawnPoint.y=(short) y;
-			critter.Orientation=core->Roll(1,16,-1);
+		short x, y;
+		int o;
+		if (sscanf(s, "[%hd%*[,.]%hd:%d]", &x, &y, &o) == 3) {
+			critter.SpawnPoint.x = x;
+			critter.SpawnPoint.y = y;
+			critter.Orientation = o;
+		} else if (sscanf(s, "[%hd%*[,.]%hd]", &x, &y) == 2) {
+			critter.SpawnPoint.x = x;
+			critter.SpawnPoint.y = y;
+			critter.Orientation = core->Roll(1, 16, -1);
 		}
 	}
-	
+
 	//store or retrieve spawn point
 	s = inifile->GetKeyAsString(crittername,"spawn_point_global", NULL);
 	if (s) {
@@ -369,9 +360,9 @@ void IniSpawn::ReadCreature(DataFileMgr *inifile, const char *crittername, Critt
 
 	s = inifile->GetKeyAsString(crittername,"spec",NULL);
 	if (s) {
-		int x[9];
+		ieByte x[9];
 		
-		ps = sscanf(s,"[%d.%d.%d.%d.%d.%d.%d.%d.%d]", x, x+1, x+2, x+3, x+4, x+5,
+		ps = sscanf(s,"[%hhu.%hhu.%hhu.%hhu.%hhu.%hhu.%hhu.%hhu.%hhu]", x, x+1, x+2, x+3, x+4, x+5,
 			x+6, x+7, x+8);
 		if (ps == 0) {
 			strnuprcpy(critter.ScriptName, s, 32);
@@ -379,7 +370,7 @@ void IniSpawn::ReadCreature(DataFileMgr *inifile, const char *crittername, Critt
 			memset(critter.Spec,-1,sizeof(critter.Spec));
 		} else {
 			while(ps--) {
-				critter.Spec[ps]=(ieByte) x[ps];
+				critter.Spec[ps] = x[ps];
 			}
 		}
 	}
@@ -636,16 +627,30 @@ void IniSpawn::RespawnNameless()
 	Game *game = core->GetGame();
 	Actor *nameless = game->GetPC(0, false);
 
+	// the final fight is fatal
+	ieDword finale = 0;
+	game->locals->Lookup("Transcendent_Final_Speech", finale);
+	if (finale) {
+		nameless->Die(NULL);
+		core->GetGUIScriptEngine()->RunFunction("GUICommonWindows", "OpenPSTDeathWindow");
+		return;
+	}
+
 	if (NamelessSpawnPoint.isnull()) {
 		core->GetGame()->JoinParty(nameless,JP_INITPOS);
 		NamelessSpawnPoint=nameless->Pos;
 		strnuprcpy(NamelessSpawnArea, nameless->Area, 8);
 	}
 
-	nameless->Resurrect();
+	nameless->Resurrect(NamelessSpawnPoint);
 	// resurrect leaves you at 1hp for raise dead, so manually bump it back to max
 	nameless->RefreshEffects(NULL);
 	nameless->SetBase(IE_HITPOINTS, 9999);
+
+	// reselect nameless, since he didn't really 'die'
+	// this matches the unconditional reselect behavior of the original
+	core->GetGame()->SelectActor(nameless, true, SELECT_NORMAL);
+
 	//hardcoded!!!
 	if (NamelessState==36) {
 		nameless->SetStance(IE_ANI_PST_START);

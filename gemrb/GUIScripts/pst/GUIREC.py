@@ -72,17 +72,20 @@ import NewLife
 from GUIDefines import *
 from ie_stats import *
 import GUIWORLD
+import LUSkillsSelection
 
 ###################################################
 LevelUpWindow = None
 RecordsWindow = None
 InformationWindow = None
 BiographyWindow = None
+PauseState = None
 
 ###################################################
 def OpenRecordsWindow ():
 	global RecordsWindow
 	global StatTable
+	global PauseState
 
 	StatTable = GemRB.LoadTable("abcomm")
 	
@@ -97,7 +100,11 @@ def OpenRecordsWindow ():
 		GUICommonWindows.SetSelectionChangeHandler (None)
 
 		GemRB.UnhideGUI ()
+		GemRB.GamePause (PauseState, 3)
 		return	
+
+	PauseState = GemRB.GamePause (3, 1)
+	GemRB.GamePause (1, 3)
 
 	GemRB.HideGUI ()
 	GemRB.LoadWindowPack ("GUIREC")
@@ -243,10 +250,18 @@ def UpdateRecordsWindow ():
 		Label.SetText (str (stats[i]))
 
 	# race
-	# HACK: for some strange reason, Morte's race is 1 (Human), instead of 45 (Morte)
-	print "species: %d  race: %d" %(GemRB.GetPlayerStat (pc, IE_SPECIES), GemRB.GetPlayerStat (pc, IE_RACE))
-	#be careful, some saves got this field corrupted
+
+	# this is -1 to lookup the value in the table
 	race = GemRB.GetPlayerStat (pc, IE_SPECIES) - 1
+
+	# workaround for original saves that don't have the characters species stat set properly
+	if race == -1:
+		if GemRB.GetPlayerStat (pc, IE_SPECIFIC) == 3: # Vhailor
+			race = 50 # Changes from GHOST to RESTLESS_SPIRIT
+		elif  GemRB.GetPlayerStat (pc, IE_SPECIFIC) == 9: # Morte
+			race = 44 # Changes from HUMAN to MORTE. Morte is Morte :)
+		else:
+			race = GemRB.GetPlayerStat (pc, IE_RACE) - 1
 
 	text = CommonTables.Races.GetValue (race, 0)
 	
@@ -871,8 +886,18 @@ def AcceptLevelUp():
 		GemRB.SetPlayerStat (pc, IE_LEVEL, GemRB.GetPlayerStat (pc, IE_LEVEL)+NumOfPrimLevUp)
 		if avatar_header['SecoLevel'] != 0:
 			GemRB.SetPlayerStat (pc, IE_LEVEL2, GemRB.GetPlayerStat (pc, IE_LEVEL2)+NumOfSecoLevUp)
+	
+	LUSkillsSelection.SkillsSave (pc)
 	UpdateRecordsWindow ()
 
+def RedrawSkills():
+	DoneButton = LevelUpWindow.GetControl(0)
+
+	if GemRB.GetVar ("SkillPointsLeft") == 0:
+		DoneButton.SetState(IE_GUI_BUTTON_ENABLED)
+	else:
+		DoneButton.SetState(IE_GUI_BUTTON_DISABLED)
+	return
 
 def OpenLevelUpWindow ():
 	global LevelUpWindow
@@ -975,9 +1000,8 @@ def OpenLevelUpWindow ():
 	Label = Window.GetControl (0x1000000E)
 	Label.SetText (str (GemRB.GetPlayerStat (pc, IE_LOCKPICKING)) + '%')
 	# Plus and Minus buttons
-	for i in range (8):
-		Button = Window.GetControl (16 + i)
-		Button.SetState (IE_GUI_BUTTON_LOCKED)
+	LUSkillsSelection.SetupSkillsWindow (pc, LUSkillsSelection.LUSKILLS_TYPE_LEVELUP, LevelUpWindow, RedrawSkills, [0,0,0], [1,1,1], 0, False)
+	RedrawSkills()
 
 	# Is avatar multi-class?
 	if avatar_header['SecoLevel'] == 0:

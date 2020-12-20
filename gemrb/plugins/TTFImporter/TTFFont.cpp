@@ -128,7 +128,7 @@ const Glyph& TTFFont::GetGlyph(ieWord chr) const
 	uint8_t* pixels = NULL;
 
 	/* Render the glyph */
-	error = FT_Render_Glyph( glyph, ft_render_mode_normal );
+	error = FT_Render_Glyph(glyph, FT_RENDER_MODE_NORMAL);
 	if( error ) {
 		LogFTError(error);
 		return AliasBlank(chr);
@@ -208,7 +208,7 @@ TTFFont::TTFFont(Palette* pal, FT_Face face, int lineheight, int baseline)
 	// blank for returning when there is an error
 	// TODO: ttf fonts have a "box" glyph they use for this
 	CreateGlyphForCharSprite(0, blank);
-	blank->Width = core->TLKEncoding.zerospace ? 1 : (LineHeight * 0.25);;
+	blank->Width = core->TLKEncoding.zerospace ? 1 : (LineHeight * 0.25);
 	CreateGlyphForCharSprite(' ', blank);
 	blank->Width *= 4;
 	CreateGlyphForCharSprite('\t', blank);

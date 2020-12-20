@@ -23,23 +23,20 @@
 
 // NOTE: Python.h has to be included first.
 
-#if defined(WIN32) && defined(_DEBUG)
-#undef _DEBUG
 #include <Python.h>
-#define _DEBUG
-#else
-#include <Python.h>
-#endif
 
 #include "ScriptEngine.h"
 
 namespace GemRB {
 
-#define SV_BPP 0
-#define SV_WIDTH 1
-#define SV_HEIGHT 2
-#define SV_GAMEPATH 3
-#define SV_TOUCH 4
+enum {
+	SV_BPP,
+	SV_WIDTH,
+	SV_HEIGHT,
+	SV_GAMEPATH,
+	SV_TOUCH,
+	SV_SAVEPATH
+};
 
 class GUIScript : public ScriptEngine {
 public:

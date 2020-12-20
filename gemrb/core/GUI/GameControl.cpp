@@ -159,7 +159,7 @@ Point GameControl::GetFormationOffset(ieDword formation, ieDword pos)
 }
 
 //WARNING: don't pass p as a reference because it gets modified
-Point GameControl::GetFormationPoint(Map *map, unsigned int pos, Point src, Point p)
+Point GameControl::GetFormationPoint(const Map *map, unsigned int pos, Point src, Point p)
 {
 	int formation=core->GetGame()->GetFormation();
 	if (pos>=FORMATIONSIZE) pos=FORMATIONSIZE-1;
@@ -253,8 +253,7 @@ void GameControl::CreateMovement(Actor *actor, const Point &p, bool append)
 bool GameControl::ShouldRun(Actor *actor) const
 {
 	if (!actor) return false;
-	ieDword speed = actor->CalculateSpeed(true);
-	if (speed != actor->GetStat(IE_MOVEMENTRATE)) {
+	if (actor->GetEncumbranceFactor(true) != 1) {
 		return false;
 	}
 	return (DoubleClick || AlwaysRun);
@@ -331,7 +330,7 @@ void GameControl::DrawArrowMarker(const Region &screen, Point p, const Region &v
 	spr->release();
 }
 
-void GameControl::DrawTargetReticle(Point p, int size, bool animate, bool flash, bool actorSelected)
+void GameControl::DrawTargetReticle(Point p, int size, bool animate, bool flash, bool actorSelected) const
 {
 	// reticles are never drawn in cutscenes
 	if (GetScreenFlags()&SF_CUTSCENE)
@@ -452,7 +451,7 @@ void GameControl::DrawInternal(Region& screen)
 		if (d->VisibleTrap(0)) {
 			d->outlineColor = ColorRed; // traps
 		} else if (d->Flags & DOOR_SECRET) {
-			if (DebugFlags & DEBUG_SHOW_DOORS || d->Flags & DOOR_FOUND) {
+			if (d->Flags & DOOR_FOUND) {
 				d->outlineColor = ColorMagenta; // found hidden door
 			} else {
 				// secret door is invisible
@@ -768,21 +767,7 @@ bool GameControl::OnKeyRelease(unsigned char Key, unsigned short Mod)
 					lastActor->GetNextAnimation();
 				}
 				break;
-			case 'b': //draw a path to the target (pathfinder debug)
-				//You need to select an origin with ctrl-o first
-				if (drawPath) {
-					PathNode* nextNode = drawPath->Next;
-					PathNode* thisNode = drawPath;
-					while (true) {
-						delete( thisNode );
-						thisNode = nextNode;
-						if (!thisNode)
-							break;
-						nextNode = thisNode->Next;
-					}
-				}
-				drawPath = core->GetGame()->GetCurrentArea()->FindPath( pfs, p, lastActor?lastActor->size:1 );
-				break;
+			// b
 			case 'c': //force cast a hardcoded spell
 				//caster is the last selected actor
 				//target is the door/actor currently under the pointer
@@ -829,9 +814,9 @@ bool GameControl::OnKeyRelease(unsigned char Key, unsigned short Mod)
 				}
 				if (lastActor && !(lastActor->GetStat(IE_MC_FLAGS)&MC_EXPORTABLE)) {
 					int size = game->GetPartySize(true);
-					if (size < 2 || game->NpcInParty < 2) break;
+					if (size < 2 || lastActor->GetCurrentArea() != game->GetCurrentArea()) break;
 					for (int i = core->Roll(1, size, 0); i < 2*size; i++) {
-						Actor *target = game->GetPC(i%size, true);
+						const Actor *target = game->GetPC(i % size, true);
 						if (target == lastActor) continue;
 						if (target->GetStat(IE_MC_FLAGS) & MC_EXPORTABLE) continue; //not NPC
 						lastActor->HandleInteractV1(target);
@@ -913,12 +898,7 @@ bool GameControl::OnKeyRelease(unsigned char Key, unsigned short Mod)
 			case 'n': //prints a list of all the live actors in the area
 				core->GetGame()->GetCurrentArea()->dump(true);
 				break;
-			case 'o': //set up the origin for the pathfinder
-				// origin
-				pfs.x = lastMouseX;
-				pfs.y = lastMouseY;
-				core->GetVideoDriver()->ConvertToGame( pfs.x, pfs.y );
-				break;
+			// o
 			case 'p': //center on actor
 				ScreenFlags|=SF_CENTERONACTOR;
 				ScreenFlags^=SF_ALWAYSCENTER;
@@ -1149,7 +1129,7 @@ void GameControl::DisplayTooltip() {
 }
 
 //returns the appropriate cursor over an active region (trap, infopoint, travel region)
-int GameControl::GetCursorOverInfoPoint(InfoPoint *overInfoPoint) const
+int GameControl::GetCursorOverInfoPoint(const InfoPoint *overInfoPoint) const
 {
 	if (target_mode == TARGET_MODE_PICK) {
 		if (overInfoPoint->VisibleTrap(0)) {
@@ -1166,15 +1146,15 @@ int GameControl::GetCursorOverInfoPoint(InfoPoint *overInfoPoint) const
 }
 
 //returns the appropriate cursor over a door
-int GameControl::GetCursorOverDoor(Door *overDoor) const
+int GameControl::GetCursorOverDoor(const Door *overDoor) const
 {
 	if (!overDoor->Visible()) {
 		if (target_mode == TARGET_MODE_NONE) {
 			// most secret doors are in walls, so default to the blocked cursor to not give them away
 			// iwd ar6010 table/door/puzzle is walkable, secret and undetectable
-			Game *game = core->GetGame();
+			const Game *game = core->GetGame();
 			if (!game) return IE_CURSOR_BLOCKED;
-			Map *area = game->GetCurrentArea();
+			const Map *area = game->GetCurrentArea();
 			if (!area) return IE_CURSOR_BLOCKED;
 			return area->GetCursor(overDoor->Pos);
 		} else {
@@ -1195,7 +1175,7 @@ int GameControl::GetCursorOverDoor(Door *overDoor) const
 }
 
 //returns the appropriate cursor over a container (or pile)
-int GameControl::GetCursorOverContainer(Container *overContainer) const
+int GameControl::GetCursorOverContainer(const Container *overContainer) const
 {
 	if (overContainer->Flags & CONT_DISABLED) {
 		return lastCursor;
@@ -1252,32 +1232,13 @@ void GameControl::OnMouseOver(unsigned short x, unsigned short y)
 	if (FormationRotation) {
 		return;
 	}
-	Game* game = core->GetGame();
+	const Game *game = core->GetGame();
 	if (!game) return;
-	Map* area = game->GetCurrentArea( );
+	const Map *area = game->GetCurrentArea();
 	if (!area) return;
 	int nextCursor = area->GetCursor( p );
 	//make the invisible area really invisible
 	if (nextCursor == IE_CURSOR_INVALID) {
-		Owner->Cursor = IE_CURSOR_BLOCKED;
-		lastCursor = IE_CURSOR_BLOCKED;
-		return;
-	}
-
-	overInfoPoint = area->TMap->GetInfoPoint( p, true );
-	if (overInfoPoint) {
-		//nextCursor = overInfoPoint->Cursor;
-		nextCursor = GetCursorOverInfoPoint(overInfoPoint);
-	}
-	// recheck in case the positioon was different, resulting in a new isVisible check
-	if (nextCursor == IE_CURSOR_INVALID) {
-		Owner->Cursor = IE_CURSOR_BLOCKED;
-		lastCursor = IE_CURSOR_BLOCKED;
-		return;
-	}
-
-	// don't allow summons to try travelling (alone), since it causes tons of loading
-	if (nextCursor == IE_CURSOR_TRAVEL && game->OnlyNPCsSelected()) {
 		Owner->Cursor = IE_CURSOR_BLOCKED;
 		lastCursor = IE_CURSOR_BLOCKED;
 		return;
@@ -1294,18 +1255,45 @@ void GameControl::OnMouseOver(unsigned short x, unsigned short y)
 		lastActor->SetOver( false );
 	}
 
-	overDoor = area->TMap->GetDoor( p );
-	overContainer = area->TMap->GetContainer( p );
+	overInfoPoint = 0;
+	overContainer = 0;
+
+	overDoor = area->TMap->GetDoor(p);
+	// ignore infopoints and containers beneath doors
+	if (!overDoor) {
+		overInfoPoint = area->TMap->GetInfoPoint(p, true);
+		if (overInfoPoint) {
+			nextCursor = GetCursorOverInfoPoint(overInfoPoint);
+		}
+		// recheck in case the position was different, resulting in a new isVisible check
+		if (nextCursor == IE_CURSOR_INVALID) {
+			Owner->Cursor = IE_CURSOR_BLOCKED;
+			lastCursor = IE_CURSOR_BLOCKED;
+			return;
+		}
+
+		// don't allow summons to try travelling (alone), since it causes tons of loading
+		if (nextCursor == IE_CURSOR_TRAVEL && game->OnlyNPCsSelected()) {
+			Owner->Cursor = IE_CURSOR_BLOCKED;
+			lastCursor = IE_CURSOR_BLOCKED;
+			return;
+		}
+
+		overContainer = area->TMap->GetContainer(p);
+	}
 
 	if (!DrawSelectionRect) {
 		if (overDoor) {
 			nextCursor = GetCursorOverDoor(overDoor);
+			if (!overDoor->Visible()) {
+				overDoor = 0;
+			}
 		}
 
 		if (overContainer) {
 			nextCursor = GetCursorOverContainer(overContainer);
 		}
-		// recheck in case the positioon was different, resulting in a new isVisible check
+		// recheck in case the position was different, resulting in a new isVisible check
 		// fixes bg2 long block door in ar0801 above vamp beds, crashing on mouseover (too big)
 		if (nextCursor == IE_CURSOR_INVALID) {
 			Owner->Cursor = IE_CURSOR_BLOCKED;
@@ -1370,11 +1358,7 @@ void GameControl::OnMouseOver(unsigned short x, unsigned short y)
 			}
 		} else if (target_mode == TARGET_MODE_ATTACK) {
 			nextCursor = IE_CURSOR_ATTACK;
-			if (overDoor) {
-				if (!overDoor->Visible()) {
-					nextCursor |= IE_CURSOR_GRAY;
-				}
-			} else if (!lastActor && !overContainer) {
+			if (!overDoor && !lastActor && !overContainer) {
 				nextCursor |= IE_CURSOR_GRAY;
 			}
 		} else if (target_mode == TARGET_MODE_CAST) {
@@ -1548,14 +1532,14 @@ void GameControl::SetScrolling(bool scroll) {
 }
 
 //generate action code for source actor to try to attack a target
-void GameControl::TryToAttack(Actor *source, Actor *tgt)
+void GameControl::TryToAttack(Actor *source, const Actor *tgt)
 {
 	if (source->GetStat(IE_SEX) == SEX_ILLUSION) return;
 	source->CommandActor(GenerateActionDirect( "NIDSpecial3()", tgt));
 }
 
 //generate action code for source actor to try to defend a target
-void GameControl::TryToDefend(Actor *source, Actor *tgt)
+void GameControl::TryToDefend(Actor *source, const Actor *tgt)
 {
 	source->SetModal(MS_NONE);
 	source->CommandActor(GenerateActionDirect( "NIDSpecial4()", tgt));
@@ -1564,7 +1548,7 @@ void GameControl::TryToDefend(Actor *source, Actor *tgt)
 // generate action code for source actor to try to pick pockets of a target (if an actor)
 // else if door/container try to pick a lock/disable trap
 // The -1 flag is a placeholder for dynamic target IDs
-void GameControl::TryToPick(Actor *source, Scriptable *tgt)
+void GameControl::TryToPick(Actor *source, const Scriptable *tgt)
 {
 	source->SetModal(MS_NONE);
 	const char* cmdString = NULL;
@@ -1574,7 +1558,7 @@ void GameControl::TryToPick(Actor *source, Scriptable *tgt)
 			break;
 		case ST_DOOR:
 		case ST_CONTAINER:
-			if (((Highlightable*)tgt)->Trapped && ((Highlightable*)tgt)->TrapDetected) {
+			if (((const Highlightable *) tgt)->Trapped && ((const Highlightable *) tgt)->TrapDetected) {
 				cmdString = "RemoveTraps([-1])";
 			} else {
 				cmdString = "PickLock([-1])";
@@ -1588,7 +1572,7 @@ void GameControl::TryToPick(Actor *source, Scriptable *tgt)
 }
 
 //generate action code for source actor to try to disable trap (only trap type active regions)
-void GameControl::TryToDisarm(Actor *source, InfoPoint *tgt)
+void GameControl::TryToDisarm(Actor *source, const InfoPoint *tgt)
 {
 	if (tgt->Type!=ST_PROXIMITY) return;
 
@@ -1650,7 +1634,7 @@ void GameControl::TryToCast(Actor *source, const Point &tgt)
 }
 
 //generate action code for source actor to use item/cast spell on another actor
-void GameControl::TryToCast(Actor *source, Actor *tgt)
+void GameControl::TryToCast(Actor *source, const Actor *tgt)
 {
 	char Tmp[40];
 
@@ -1691,7 +1675,7 @@ void GameControl::TryToCast(Actor *source, Actor *tgt)
 		if (spellIndex<0) {
 			sprintf(action->string0Parameter,"%.8s",spellName);
 		} else {
-			CREMemorizedSpell *si;
+			const CREMemorizedSpell *si;
 			//spell casting at target
 			si = source->spellbook.GetMemorizedSpell(spellOrItem, spellSlot, spellIndex);
 			if (!si) {
@@ -1720,7 +1704,7 @@ void GameControl::TryToCast(Actor *source, Actor *tgt)
 }
 
 //generate action code for source actor to use talk to target actor
-void GameControl::TryToTalk(Actor *source, Actor *tgt)
+void GameControl::TryToTalk(Actor *source, const Actor *tgt)
 {
 	if (source->GetStat(IE_SEX) == SEX_ILLUSION) return;
 	//Nidspecial1 is just an unused action existing in all games
@@ -1845,7 +1829,7 @@ bool GameControl::HandleActiveRegion(InfoPoint *trap, Actor * actor, Point &p)
 			//there. Here we have to check on the
 			//reset trap and deactivated flags
 			if (trap->Scripts[0]) {
-				GameControl *gc = core->GetGameControl();
+				const GameControl *gc = core->GetGameControl();
 				if (!(trap->Flags & TRAP_DEACTIVATED) && !(gc->GetDialogueFlags() & DF_FREEZE_SCRIPTS)) {
 					trap->AddTrigger(TriggerEntry(trigger_clicked, actor->GetGlobalID()));
 					actor->LastMarked = trap->GetGlobalID();
@@ -1939,6 +1923,9 @@ bool GameControl::ShouldTriggerWorldMap(const Actor *pc) const
 {
 	if (!core->HasFeature(GF_TEAM_MOVEMENT)) return false;
 
+	bool keyAreaVisited = CheckVariable(pc, "AR0500_Visited", "GLOBAL") == 1;
+	if (!keyAreaVisited) return false;
+
 	bool teamMoved = (pc->GetInternalFlag() & IF_USEEXIT) && overInfoPoint && overInfoPoint->Type == ST_TRAVEL;
 	if (!teamMoved) return false;
 
@@ -1971,7 +1958,7 @@ void GameControl::OnMouseUp(unsigned short x, unsigned short y, unsigned short B
 	core->GetVideoDriver()->ConvertToGame( p.x, p.y );
 	Game* game = core->GetGame();
 	if (!game) return;
-	Map* area = game->GetCurrentArea( );
+	const Map *area = game->GetCurrentArea();
 	if (!area) return;
 
 	if (DrawSelectionRect) {
@@ -2009,12 +1996,12 @@ void GameControl::OnMouseUp(unsigned short x, unsigned short y, unsigned short B
 		}
 
 		if (Button & GEM_MB_ACTION) {
+			Actor *pc = core->GetFirstSelectedPC(false);
+			if (!pc) {
+				//this could be a non-PC
+				pc = game->selected[0];
+			}
 			if (!actor) {
-				Actor *pc = core->GetFirstSelectedPC(false);
-				if (!pc) {
-					//this could be a non-PC
-					pc = game->selected[0];
-				}
 				//add a check if you don't want some random monster handle doors and such
 				if (overDoor) {
 					HandleDoor(overDoor, pc);
@@ -2045,15 +2032,15 @@ void GameControl::OnMouseUp(unsigned short x, unsigned short y, unsigned short B
 						goto formation_handling;
 					}
 				}
-				//just a single actor, no formation
-				if (game->selected.size()==1
-					&& target_mode == TARGET_MODE_CAST
-					&& spellCount
-					&& (target_types&GA_POINT)) {
-					//the player is using an item or spell on the ground
-					TryToCast(pc, p);
-					goto formation_handling;
-				}
+			}
+			//just a single actor, no formation
+			if (game->selected.size()==1
+				&& target_mode == TARGET_MODE_CAST
+				&& spellCount
+				&& (target_types&GA_POINT)) {
+				//the player is using an item or spell on the ground
+				TryToCast(pc, p);
+				goto formation_handling;
 			}
 			doMove = (!actor && target_mode == TARGET_MODE_NONE);
 		} else if (Button & GEM_MB_MENU) {
@@ -2091,7 +2078,7 @@ formation_handling:
 
 void GameControl::ExecuteMovement(Actor *actor, unsigned short x, unsigned short y, bool createWaypoint)
 {
-	Game *game = core->GetGame();
+	const Game *game = core->GetGame();
 	Point p(x,y);
 	core->GetVideoDriver()->ConvertToGame(p.x, p.y);
 
@@ -2131,7 +2118,7 @@ void GameControl::ExecuteMovement(Actor *actor, unsigned short x, unsigned short
 		}
 
 		if (party.size() > 1) {
-			Map* map = actor->GetCurrentArea();
+			const Map *map = actor->GetCurrentArea();
 			move = GetFormationPoint(map, i, src, p);
 		}
 		CreateMovement(actor, move, createWaypoint);
@@ -2345,8 +2332,8 @@ bool GameControl::OnSpecialKeyPress(unsigned char Key)
 
 void GameControl::CalculateSelection(const Point &p)
 {
-	Game* game = core->GetGame();
-	Map* area = game->GetCurrentArea( );
+	const Game *game = core->GetGame();
+	const Map *area = game->GetCurrentArea();
 	if (DrawSelectionRect) {
 		if (p.x < ClickPoint.x) {
 			SelectionRect.w = ClickPoint.x - p.x;

@@ -82,7 +82,7 @@ Door::~Door(void)
 	}
 }
 
-void Door::ImpedeBlocks(int count, Point *points, unsigned char value)
+void Door::ImpedeBlocks(int count, Point *points, unsigned char value) const
 {
 	for(int i = 0;i<count;i++) {
 		unsigned char tmp = area->GetInternalSearchMap(points[i].x, points[i].y) & PATH_MAP_NOTDOOR;
@@ -198,7 +198,7 @@ int Door::IsOpen() const
 }
 
 //also mark actors to fix position
-bool Door::BlockedOpen(int Open, int ForceOpen)
+bool Door::BlockedOpen(int Open, int ForceOpen) const
 {
 	bool blocked;
 	int count;
@@ -242,7 +242,7 @@ bool Door::BlockedOpen(int Open, int ForceOpen)
 	return blocked;
 }
 
-void Door::SetDoorOpen(int Open, int playsound, ieDword ID)
+void Door::SetDoorOpen(int Open, int playsound, ieDword ID, bool addTrigger)
 {
 	if (playsound) {
 		//the door cannot be blocked when opening,
@@ -256,17 +256,19 @@ void Door::SetDoorOpen(int Open, int playsound, ieDword ID)
 		area->JumpActors(true);
 	}
 	if (Open) {
-		if (Trapped) {
-			AddTrigger(TriggerEntry(trigger_opened, ID));
-		} else {
-			AddTrigger(TriggerEntry(trigger_harmlessopened, ID));
+		if (addTrigger) {
+			if (Trapped) {
+				AddTrigger(TriggerEntry(trigger_opened, ID));
+			} else {
+				AddTrigger(TriggerEntry(trigger_harmlessopened, ID));
+			}
 		}
 
 		// in PS:T, opening a door does not unlock it
 		if (!core->HasFeature(GF_REVERSE_DOOR)) {
 			SetDoorLocked(false,playsound);
 		}
-	} else {
+	} else if (addTrigger) {
 		if (Trapped) {
 			AddTrigger(TriggerEntry(trigger_closed, ID));
 		} else {
@@ -301,7 +303,7 @@ void Door::TryDetectSecret(int skill, ieDword actorID)
 }
 
 // return true if the door isn't secret or if it is, but was already discovered
-bool Door::Visible()
+bool Door::Visible() const
 {
 	return (!(Flags & DOOR_SECRET) || (Flags & DOOR_FOUND)) && !(Flags & DOOR_HIDDEN);
 }
@@ -335,7 +337,7 @@ void Highlightable::SetTrapDetected(int x)
 	}
 }
 
-void Highlightable::TryDisarm(Actor *actor)
+void Highlightable::TryDisarm(const Actor *actor)
 {
 	if (!Trapped || !TrapDetected) return;
 
@@ -368,11 +370,12 @@ void Highlightable::TryDisarm(Actor *actor)
 		}
 		displaymsg->DisplayConstantStringName(STR_DISARM_DONE, DMC_LIGHTGREY, actor);
 		int xp = actor->CalculateExperience(XP_DISARM, actor->GetXPLevel(1));
-		Game *game = core->GetGame();
+		const Game *game = core->GetGame();
 		game->ShareXP(xp, SX_DIVIDE);
 		core->GetGameControl()->ResetTargetMode();
 		core->PlaySound(DS_DISARMED, SFX_CHAN_HITS);
 	} else {
+		AddTrigger(TriggerEntry(trigger_disarmfailed, actor->GetGlobalID()));
 		if (core->HasFeature(GF_3ED_RULES)) {
 			// ~Failed Disarm Device - d20 roll %d + Disarm Device skill %d + INT mod %d >= Trap DC %d~
 			displaymsg->DisplayRollStringName(39266, DMC_LIGHTGREY, actor, roll, skill-bonus, bonus, trapDC);
@@ -383,7 +386,7 @@ void Highlightable::TryDisarm(Actor *actor)
 	ImmediateEvent();
 }
 
-void Door::TryPickLock(Actor *actor)
+void Door::TryPickLock(const Actor *actor)
 {
 	if (LockDifficulty == 100) {
 		if (OpenStrRef != (ieDword)-1) {
@@ -418,7 +421,7 @@ void Door::TryPickLock(Actor *actor)
 	core->PlaySound(DS_PICKLOCK, SFX_CHAN_HITS);
 	ImmediateEvent();
 	int xp = actor->CalculateExperience(XP_LOCKPICK, actor->GetXPLevel(1));
-	Game *game = core->GetGame();
+	const Game *game = core->GetGame();
 	game->ShareXP(xp, SX_DIVIDE);
 }
 

@@ -1,7 +1,5 @@
 // automatically generated file from cmake!
 
-#define PACKAGE "gemrb"
-
 #cmakedefine SIZEOF_INT ${SIZEOF_INT}
 #cmakedefine SIZEOF_LONG_INT ${SIZEOF_LONG_INT}
 #cmakedefine HAVE_SIZEOF_SSIZE_T 1
@@ -25,4 +23,6 @@
 #cmakedefine WIN32_USE_STDIO 1
 #cmakedefine HAVE_ICONV 1
 #cmakedefine RPI 1
+#cmakedefine HAVE_MMAP ${HAVE_MMAP}
+#cmakedefine SUPPORTS_MEMSTREAM ${SUPPORTS_MEMSTREAM}
 #cmakedefine01 ICONV_ACCEPTS_NONCONST_INPUT

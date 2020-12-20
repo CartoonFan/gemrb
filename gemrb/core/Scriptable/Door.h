@@ -34,7 +34,7 @@ class TileOverlay;
 #define DOOR_DETECTABLE  8   //trap detectable
 #define DOOR_BROKEN      16  //door is broken (force opened)
 #define DOOR_CANTCLOSE   32  // used in BG1 (at least TotSC). Prevents random closing of doors in CGameDoor::CompressTime. (The random closing is only done when more than a hour of ingame time passed.) 
-#define DOOR_LINKED      64   //info trigger linked to this door
+#define DOOR_LINKED      64   //info trigger linked to this door, iwd2: DETECTED in the ids
 #define DOOR_SECRET      128  //door is secret
 #define DOOR_FOUND       256  //secret door found
 #define DOOR_TRANSPARENT 512  //obscures vision (LOCKEDINFOTEXT in iwd2)
@@ -42,7 +42,7 @@ class TileOverlay;
 #define DOOR_SLIDE       2048 //impeded blocks ignored (WARNINGINFOTEXT in iwd2)
 #define DOOR_WARNINGTEXTDISPLAYED 0x1000 // iwd2
 #define DOOR_HIDDEN      8192 // iwd2, ignore the door
-#define DOOR_USEUPKEY    0x4000 // treating as identical to DOOR_KEY
+#define DOOR_USEUPKEY    0x4000 // iwd2, treating as identical to DOOR_KEY
 #define DOOR_LOCKEDINFOTEXT 0x8000
 #define DOOR_WARNINGINFOTEXT 0x10000
 
@@ -82,26 +82,26 @@ public:
 	ieStrRef NameStrRef;
 	ieWord hp, ac;          //unused???, but learned from IE DEV info
 private:
-	void SetWallgroups(int count, int value);
-	void ImpedeBlocks(int count, Point *points, unsigned char value);
+	void ImpedeBlocks(int count, Point *points, unsigned char value) const;
 	void UpdateDoor();
-	bool BlockedOpen(int Open, int ForceOpen);
+	bool BlockedOpen(int Open, int ForceOpen) const;
 public:
 	void ToggleTiles(int State, int playsound = false);
 	void SetName(const char* Name); // sets door ID
 	void SetTiles(unsigned short* Tiles, int count);
 	bool CanDetectTrap() const;
 	void SetDoorLocked(int Locked, int playsound);
-	void SetDoorOpen(int Open, int playsound, ieDword ID);
+	void SetDoorOpen(int Open, int playsound, ieDword ID, bool addTrigger = true);
 	void SetPolygon(bool Open, Gem_Polygon* poly);
 	int IsOpen() const;
-	void TryPickLock(Actor *actor);
+	void TryPickLock(const Actor *actor);
 	void TryBashLock(Actor* actor) ;
 	bool TryUnlock(Actor *actor);
 	void TryDetectSecret(int skill, ieDword actorID);
-	bool Visible();
+	bool Visible() const;
 	void dump() const;
 	int TrapResets() const { return Flags & DOOR_RESET; }
+	bool CantAutoClose() const { return Flags & (DOOR_CANTCLOSE | DOOR_LOCKED); }
 	void SetNewOverlay(TileOverlay *Overlay);
 };
 

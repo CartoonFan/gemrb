@@ -22,6 +22,7 @@
 #include "win32def.h"
 #include "strrefs.h"
 #include "ie_cursors.h"
+#include "voodooconst.h"
 
 #include "DialogHandler.h"
 #include "DisplayMessage.h"
@@ -39,6 +40,8 @@
 #include "RNG.h"
 #include "Scriptable/InfoPoint.h"
 
+#include <cmath>
+
 namespace GemRB {
 
 // we start this at a non-zero value to make debugging easier
@@ -46,7 +49,6 @@ static ieDword globalActorCounter = 10000;
 static bool startActive = false;
 static bool third = false;
 static bool pst_flags = false;
-static ieResRef UncannyDodgeBonus = {"UNCANNY"};
 static unsigned short ClearActionsID = 133; // same for all games
 
 /***********************
@@ -187,24 +189,18 @@ void Scriptable::SetScript(const ieResRef aScript, int idx, bool ai)
 	if (idx >= MAX_SCRIPTS) {
 		error("Scriptable", "Invalid script index!\n");
 	}
-	delete Scripts[idx];
+	if (Scripts[idx] && Scripts[idx]->running) {
+		Scripts[idx]->dead = true;
+	} else {
+		delete Scripts[idx];
+	}
 	Scripts[idx] = NULL;
-	// NONE is an 'invalid' script name, never used seriously
-	// This hack is to prevent flooding of the console
-	if (aScript[0] && stricmp(aScript, "NONE") ) {
+	// NONE is an 'invalid' script name, seldomly used to reset the slot, which we do above
+	// This check is to prevent flooding of the console
+	if (aScript[0] && stricmp(aScript, "NONE")) {
 		if (idx!=AI_SCRIPT_LEVEL) ai = false;
 		Scripts[idx] = new GameScript( aScript, this, idx, ai );
 	}
-}
-
-void Scriptable::SetScript(int index, GameScript* script)
-{
-	if (index >= MAX_SCRIPTS) {
-		Log(ERROR, "Scriptable", "Invalid script index!");
-		return;
-	}
-	delete Scripts[index];
-	Scripts[index] = script;
 }
 
 void Scriptable::SetSpellResRef(ieResRef resref) {
@@ -379,7 +375,7 @@ void Scriptable::TickScripting()
 
 void Scriptable::ExecuteScript(int scriptCount)
 {
-	GameControl *gc = core->GetGameControl();
+	const GameControl *gc = core->GetGameControl();
 
 	// area scripts still run for at least the current area, in bg1 (see ar2631, confirmed by testing)
 	// but not in bg2 (kill Abazigal in ar6005)
@@ -415,7 +411,10 @@ void Scriptable::ExecuteScript(int scriptCount)
 	}
 
 	// don't run scripts if we're in dialog
-	if ((gc->GetDialogueFlags() & DF_IN_DIALOG) && gc->dialoghandler->InDialog(this) &&
+	// ... if it's a script-blocking one (exceptions only possible in bg2, see use of GF_FORCE_DIALOGPAUSE)
+	constexpr int freezingDLG = DF_IN_DIALOG | DF_FREEZE_SCRIPTS;
+	if ((gc->GetDialogueFlags() & freezingDLG) == freezingDLG &&
+		gc->dialoghandler->InDialog(this) &&
 		(!act || act->Modified[IE_IGNOREDIALOGPAUSE] == 0)) {
 		return;
 	}
@@ -434,6 +433,9 @@ void Scriptable::ExecuteScript(int scriptCount)
 		GameScript *Script = Scripts[scriptlevel];
 		if (Script) {
 			changed |= Script->Update(&continuing, &done);
+			if (Script->dead) {
+				delete Script;
+			}
 		}
 
 		/* scripts are not concurrent, see WAITPC override script for example */
@@ -581,7 +583,7 @@ void Scriptable::ProcessActions()
 		}
 		if (!CurrentAction) {
 			ClearActions();
-			lastAction = -1;
+			// clear lastAction here if you'll ever need it after exiting the loop
 			break;
 		}
 		lastAction = CurrentAction->actionID;
@@ -625,7 +627,7 @@ unsigned long Scriptable::GetWait() const
 	return WaitCounter;
 }
 
-void Scriptable::LeaveDialog()
+void Scriptable::LeftDialog()
 {
 	AddTrigger(TriggerEntry(trigger_wasindialog));
 }
@@ -690,12 +692,24 @@ void Scriptable::AddTrigger(TriggerEntry trigger)
 {
 	triggers.push_back(trigger);
 	ImmediateEvent();
+	SetLastTrigger(trigger.triggerID, trigger.param1);
+}
 
-	assert(trigger.triggerID < MAX_TRIGGERS);
-	if (triggerflags[trigger.triggerID] & TF_SAVED) {
+// plenty of triggers in svitrobj don't send trigger messages and so never see the code in AddTrigger
+void Scriptable::SetLastTrigger(ieDword triggerID, ieDword globalID)
+{
+	assert(triggerID < MAX_TRIGGERS);
+	if (triggerflags[triggerID] & TF_SAVED) {
 		//TODO: if LastTrigger is still overwritten by script action blocks, store this in a separate field and copy it back when the block ends
-		//Log(WARNING, "Scriptable", "%s: Added LastTrigger: %d for trigger %d\n", scriptName, trigger.param1, trigger.triggerID);
-		LastTrigger = trigger.param1;
+		const char *name = "none";
+		if (area) {
+			Scriptable *scr = area->GetScriptableByGlobalID(globalID);
+			if (scr) {
+				name = scr->GetScriptName();
+			}
+		}
+		ScriptDebugLog(ID_TRIGGERS, "Scriptable", "%s: Added LastTrigger: %d (%s) for trigger %d\n", scriptName, globalID, name, triggerID);
+		LastTrigger = globalID;
 	}
 }
 
@@ -712,29 +726,24 @@ bool Scriptable::MatchTrigger(unsigned short id, ieDword param) {
 	return false;
 }
 
-bool Scriptable::MatchTriggerWithObject(unsigned short id, class Object *obj, ieDword param) {
-	for (std::list<TriggerEntry>::iterator m = triggers.begin(); m != triggers.end (); m++) {
-		TriggerEntry &trigger = *m;
-		if (trigger.triggerID != id)
-			continue;
-		if (param && trigger.param2 != param)
-			continue;
-		if (!MatchActor(this, trigger.param1, obj))
-			continue;
+bool Scriptable::MatchTriggerWithObject(unsigned short id, const Object *obj, ieDword param) const
+{
+	for (auto& trigger : triggers) {
+		if (trigger.triggerID != id) continue;
+		if (param && trigger.param2 != param) continue;
+		if (!MatchActor(this, trigger.param1, obj)) continue;
 		return true;
 	}
 
 	return false;
 }
 
-const TriggerEntry *Scriptable::GetMatchingTrigger(unsigned short id, unsigned int notflags) {
-	for (std::list<TriggerEntry>::iterator m = triggers.begin(); m != triggers.end (); ++m) {
-		TriggerEntry &trigger = *m;
-		if (trigger.triggerID != id)
-			continue;
-		if (notflags & trigger.flags)
-			continue;
-		return &*m;
+const TriggerEntry *Scriptable::GetMatchingTrigger(unsigned short id, unsigned int notflags) const
+{
+	for (auto& trigger : triggers) {
+		if (trigger.triggerID != id) continue;
+		if (notflags & trigger.flags) continue;
+		return &trigger;
 	}
 
 	return NULL;
@@ -1044,6 +1053,12 @@ void Scriptable::CastSpellPointEnd(int level, int no_stance)
 		break;
 	}
 
+	Actor *target = area->GetActor(LastTargetPos, GA_NO_UNSCHEDULED|GA_NO_HIDDEN);
+	if (target) {
+		target->AddTrigger(TriggerEntry(trigger_spellcastonme, GetGlobalID(), spellID));
+		target->LastSpellOnMe = spellID;
+	}
+
 	ResetCastingState(caster);
 }
 
@@ -1114,7 +1129,6 @@ void Scriptable::CastSpellEnd(int level, int no_stance)
 		break;
 	}
 
-	// TODO: maybe it should be set on effect application, since the data uses it with dispel magic and true sight a lot
 	Actor *target = area->GetActorByGlobalID(LastSpellTarget);
 	if (target) {
 		target->AddTrigger(TriggerEntry(trigger_spellcastonme, GetGlobalID(), spellID));
@@ -1223,7 +1237,7 @@ void Scriptable::SpellcraftCheck(const Actor *caster, const ieResRef SpellRef)
 		if (detective->GetStat(IE_EA) > EA_CONTROLLABLE) {
 			continue;
 		}
-		if ((signed)detective->GetSkill(IE_SPELLCRAFT) <= 0) {
+		if (detective->GetSkill(IE_SPELLCRAFT) <= 0) {
 			continue;
 		}
 
@@ -1303,7 +1317,7 @@ int Scriptable::CastSpellPoint( const Point &target, bool deplete, bool instant,
 	if (Type == ST_ACTOR) {
 		actor = (Actor *) this;
 		if (actor->HandleCastingStance(SpellResRef, deplete, instant) ) {
-			Log(ERROR, "Scriptable", "Spell not known or memorized, aborting cast!");
+			Log(ERROR, "Scriptable", "Spell %s not known or memorized, aborting cast!", SpellResRef);
 			return -1;
 		}
 	}
@@ -1338,7 +1352,7 @@ int Scriptable::CastSpell( Scriptable* target, bool deplete, bool instant, bool 
 	if (Type == ST_ACTOR) {
 		actor = (Actor *) this;
 		if (actor->HandleCastingStance(SpellResRef, deplete, instant) ) {
-			Log(ERROR, "Scriptable", "Spell not known or memorized, aborting cast!");
+			Log(ERROR, "Scriptable", "Spell %s not known or memorized, aborting cast!", SpellResRef);
 			return -1;
 		}
 	}
@@ -1902,21 +1916,13 @@ bool Highlightable::TriggerTrap(int /*skill*/, ieDword ID)
 		return false;
 	}
 	AddTrigger(TriggerEntry(trigger_entered, ID));
-	// uncanny dodge trap save bonus
-	if (third) {
-		// no info anywhere, but 3ed rules add +1 reflex saves and +1 AC
-		// we approx that by applying this bonus for half a round
-		Actor *victim = core->GetGame()->GetActorByGlobalID(ID);
-		if (victim) {
-			ieDword bonus = victim->GetStat(IE_UNCANNY_DODGE) & 0xff;
-			if (bonus) {
-				core->ApplySpell(UncannyDodgeBonus, victim, this, bonus);
-			}
-		}
-	}
+	AddTrigger(TriggerEntry(trigger_traptriggered, ID)); // for that one user in bg2
+
 	// the second part is a hack to deal with bg2's ar1401 lava floor trap ("muck"), which doesn't have the repeating bit set
 	// should we always send Entered instead, also when !Trapped? Does not appear so, see history of InfoPoint::TriggerTrap
-	if (!TrapResets() && (TrapDetectionDiff && TrapRemovalDiff)) {
+	if (TrapResets()) {
+		AddTrigger(TriggerEntry(trigger_reset, GetGlobalID()));
+	} else if (TrapDetectionDiff && TrapRemovalDiff) {
 		Trapped = false;
 	}
 	return true;
@@ -1927,7 +1933,7 @@ bool Highlightable::TryUnlock(Actor *actor, bool removekey) {
 	Actor *haskey = NULL;
 
 	if (Key && actor->InParty) {
-		Game *game = core->GetGame();
+		const Game *game = core->GetGame();
 		//allow unlock when the key is on any partymember
 		for (int idx = 0; idx < game->GetPartySize(false); idx++) {
 			Actor *pc = game->FindPC(idx + 1);
@@ -1998,6 +2004,9 @@ bool Highlightable::PossibleToSeeTrap() const
 Movable::Movable(ScriptableType type)
 	: Selectable( type )
 {
+	bumpBackTries = 0;
+	bumped = false;
+	oldPos = Pos;
 	Destination = Pos;
 	Orientation = 0;
 	NewOrientation = 0;
@@ -2013,18 +2022,24 @@ Movable::Movable(ScriptableType type)
 	HomeLocation.x = 0;
 	HomeLocation.y = 0;
 	maxWalkDistance = 0;
+	prevTicks = 0;
+	pathTries = 0;
+	randomBackoff = 0;
+	pathfindingDistance = size;
+	randomWalkCounter = 0;
+	pathAbandoned = false;
 }
 
 Movable::~Movable(void)
 {
 	if (path) {
-		ClearPath();
+		ClearPath(true);
 	}
 }
 
-int Movable::GetPathLength()
+int Movable::GetPathLength() const
 {
-	PathNode *node = GetNextStep(0);
+	const PathNode *node = GetNextStep(0);
 	if (!node) return 0;
 
 	int i = 0;
@@ -2035,10 +2050,10 @@ int Movable::GetPathLength()
 	return i;
 }
 
-PathNode *Movable::GetNextStep(int x)
+PathNode *Movable::GetNextStep(int x) const
 {
 	if (!step) {
-		DoStep((unsigned int) ~0);
+		error("GetNextStep", "Hit with step = null");
 	}
 	PathNode *node = step;
 	while(node && x--) {
@@ -2047,7 +2062,7 @@ PathNode *Movable::GetNextStep(int x)
 	return node;
 }
 
-Point Movable::GetMostLikelyPosition()
+Point Movable::GetMostLikelyPosition() const
 {
 	if (!path) {
 		return Pos;
@@ -2056,7 +2071,7 @@ Point Movable::GetMostLikelyPosition()
 //actually, sometimes middle path would be better, if
 //we stand in Destination already
 	int halfway = GetPathLength()/2;
-	PathNode *node = GetNextStep(halfway);
+	const PathNode *node = GetNextStep(halfway);
 	if (node) {
 		return Point((ieWord) ((node->x*16)+8), (ieWord) ((node->y*12)+6) );
 	}
@@ -2130,30 +2145,13 @@ void Movable::SetAttackMoveChances(ieWord *amc)
 }
 
 //this could be used for WingBuffet as well
-void Movable::MoveLine(int steps, int Pass, ieDword orient)
+void Movable::MoveLine(int steps, ieDword orient)
 {
 	if (path || !steps) {
 		return;
 	}
-	Point p = Pos;
-	p.x/=16;
-	p.y/=12;
-	path = area->GetLine( p, steps, orient, Pass );
-}
-
-static void AdjustPositionTowards(Point &Pos, ieDword time_diff, unsigned int walk_speed, short srcx, short srcy, short destx, short desty) {
-	if (destx > srcx)
-		Pos.x += ( unsigned short )
-			( ( ( ( ( destx * 16 ) + 8 ) - Pos.x ) * ( time_diff ) ) / walk_speed );
-	else
-		Pos.x -= ( unsigned short )
-			( ( ( Pos.x - ( ( destx * 16 ) + 8 ) ) * ( time_diff ) ) / walk_speed );
-	if (desty > srcy)
-		Pos.y += ( unsigned short )
-			( ( ( ( ( desty * 12 ) + 6 ) - Pos.y ) * ( time_diff ) ) / walk_speed );
-	else
-		Pos.y -= ( unsigned short )
-			( ( ( Pos.y - ( ( desty * 12 ) + 6 ) ) * ( time_diff ) ) / walk_speed );
+	// DoStep takes care of stopping on walls if necessary
+	path = area->GetLine(Pos, steps, orient);
 }
 
 unsigned char Movable::GetNextFace()
@@ -2174,51 +2172,161 @@ unsigned char Movable::GetNextFace()
 	return Orientation;
 }
 
-// returns whether we made all pending steps (so, false if we must be called again this tick)
-// we can't just do them all here because the caller might have to update searchmap etc
-bool Movable::DoStep(unsigned int walk_speed, ieDword time)
+
+void Movable::Backoff()
 {
+	StanceID = IE_ANI_READY;
+	if (InternalFlags & IF_RUNNING) {
+		randomBackoff = RAND(MAX_PATH_TRIES * 2 / 3, MAX_PATH_TRIES * 4 / 3);
+	} else {
+		randomBackoff = RAND(MAX_PATH_TRIES, MAX_PATH_TRIES * 2);
+	}
+}
+
+
+void Movable::BumpAway()
+{
+	area->ClearSearchMapFor(this);
+	if (!IsBumped()) oldPos = Pos;
+	bumped = true;
+	bumpBackTries = 0;
+	area->AdjustPositionNavmap(Pos);
+}
+
+void Movable::BumpBack()
+{
+	if (Type != ST_ACTOR) return;
+	Actor *actor = (Actor*)this;
+	area->ClearSearchMapFor(this);
+	unsigned oldPosBlockStatus = area->GetBlockedNavmap(oldPos.x, oldPos.y);
+	if (!(oldPosBlockStatus & PATH_MAP_PASSABLE)) {
+		// Do bump back if the actor is "blocking" itself
+		if (!(oldPosBlockStatus & PATH_MAP_ACTOR && area->GetActor(oldPos, GA_NO_DEAD|GA_NO_UNSCHEDULED) == actor)) {
+			area->BlockSearchMap(Pos, size, actor->IsPartyMember() ? PATH_MAP_PC : PATH_MAP_NPC);
+			if (actor->GetStat(IE_EA) < EA_GOODCUTOFF) {
+				bumpBackTries++;
+				if (bumpBackTries > MAX_BUMP_BACK_TRIES && SquaredDistance(Pos, oldPos) < unsigned(size * 32 * size * 32)) {
+					oldPos = Pos;
+					bumped = false;
+					bumpBackTries = 0;
+					if (SquaredDistance(Pos, Destination) < unsigned(size * 32 * size * 32)) {
+						ClearPath(true);
+					}
+
+				}
+			}
+			return;
+		}
+	}
+	bumped = false;
+	MoveTo(oldPos);
+	bumpBackTries = 0;
+}
+
+// Takes care of movement and actor bumping, i.e. gently pushing blocking actors out of the way
+// The movement logic is a proportional regulator: the displacement/movement vector has a
+// fixed radius, based on actor walk speed, and its direction heads towards the next waypoint.
+// The bumping logic checks if there would be a collision if the actor was to move according to this
+// displacement vector and then, if that is the case, checks if that actor can be bumped
+// In that case, it bumps it and goes on with its step, otherwise it either stops and waits
+// for a random time (inspired by network media access control algorithms) or just stops if
+// the goal is close enough.
+void Movable::DoStep(unsigned int walkScale, ieDword time) {
+	Actor *actor = nullptr;
+	if (Type == ST_ACTOR) actor = (Actor*)this;
+	// Only bump back if not moving
+	// Actors can be bumped while moving if they are backing off
 	if (!path) {
-		return true;
+		if (IsBumped()) {
+			BumpBack();
+		}
+		return;
 	}
 	if (!time) time = core->GetGame()->Ticks;
-	if (!walk_speed) {
+	if (!walkScale) {
 		// zero speed: no movement
-		timeStartStep = time;
 		StanceID = IE_ANI_READY;
-		return true;
+		timeStartStep = time;
+		return;
 	}
 	if (!step) {
 		step = path;
 		timeStartStep = time;
-	} else if (step->Next && (( time - timeStartStep ) >= walk_speed)) {
-		//print("[New Step] : Orientation = %d", step->orient);
-		step = step->Next;
-		timeStartStep = timeStartStep + walk_speed;
+		return;
 	}
-	SetOrientation (step->orient, true);
-	StanceID = IE_ANI_WALK;
-	if ((Type == ST_ACTOR) && (InternalFlags & IF_RUNNING)) {
-		StanceID = IE_ANI_RUN;
+
+	Point nmptStep(step->x, step->y);
+	double dx = nmptStep.x - Pos.x;
+	double dy = nmptStep.y - Pos.y;
+	Map::NormalizeDeltas(dx, dy, double(gamedata->GetStepTime()) / double(walkScale));
+	if (time > timeStartStep) {
+		Actor *actorInTheWay = nullptr;
+		// We can't use GetActorInRadius because we want to only check directly along the way
+		// and not be blocked by actors who are on the sides
+		int collisionLookaheadRadius = ((size < 3 ? 3 : size) - 1) * 3;
+		for (int r = collisionLookaheadRadius; r > 0 && !actorInTheWay; r--) {
+			double xCollision = Pos.x + dx * r;
+			double yCollision = Pos.y + dy * r * 0.75;
+			Point nmptCollision(xCollision, yCollision);
+			actorInTheWay = area->GetActor(nmptCollision, GA_NO_DEAD|GA_NO_UNSCHEDULED);
+		}
+
+		if (BlocksSearchMap() && actorInTheWay && actorInTheWay != this && actorInTheWay->BlocksSearchMap()) {
+			// Give up instead of bumping if you are close to the goal
+			if (!(step->Next) && PersonalDistance(nmptStep, this) < MAX_OPERATING_DISTANCE) {
+				ClearPath(true);
+				NewOrientation = Orientation;
+				// Do not call ReleaseCurrentAction() since other actions
+				// than MoveToPoint can cause movement
+				Log(DEBUG, "PathFinderWIP", "Abandoning because I'm close to the goal");
+				pathAbandoned = true;
+				return;
+			}
+			if (actor && actor->ValidTarget(GA_CAN_BUMP) && actorInTheWay->ValidTarget(GA_ONLY_BUMPABLE)) {
+				actorInTheWay->BumpAway();
+			} else {
+				Backoff();
+				return;
+			}
+		}
+		// Stop if there's a door in the way
+		if (BlocksSearchMap() && area->GetBlockedNavmap(Pos.x + dx, Pos.y + dy) & PATH_MAP_SIDEWALL) {
+			ClearPath(true);
+			NewOrientation = Orientation;
+			return;
+		}
+		if (BlocksSearchMap()) {
+			area->ClearSearchMapFor(this);
+		}
+		StanceID = IE_ANI_WALK;
+		if (InternalFlags & IF_RUNNING) {
+			StanceID = IE_ANI_RUN;
+		}
+		Pos.x += dx;
+		Pos.y += dy;
+		oldPos = Pos;
+		if (actor && BlocksSearchMap()) {
+			area->BlockSearchMap(Pos, size, actor->IsPartyMember() ? PATH_MAP_PC : PATH_MAP_NPC);
+		}
+
+		SetOrientation(step->orient, false);
+		timeStartStep = time;
+		if (Pos == nmptStep) {
+			if (step->Next) {
+				step = step->Next;
+			} else {
+				ClearPath(true);
+				NewOrientation = Orientation;
+				pathfindingDistance = size;
+			}
+		}
 	}
-	Pos.x = ( step->x * 16 ) + 8;
-	Pos.y = ( step->y * 12 ) + 6;
-	if (!step->Next) {
-		// we reached our destination, we are done
-		ClearPath();
-		NewOrientation = Orientation;
-		//since clearpath no longer sets currentaction to NULL
-		//we set it here
-		//no we don't, action is responsible for releasing itself
-		//ReleaseCurrentAction();
-		return true;
-	}
-	if (( time - timeStartStep ) >= walk_speed) {
-		// we didn't finish all pending steps, yet
-		return false;
-	}
-	AdjustPositionTowards(Pos, time - timeStartStep, walk_speed, step->x, step->y, step->Next->x, step->Next->y);
-	return true;
+}
+
+void Movable::AdjustPosition()
+{
+	area->AdjustPosition(Pos);
+	ImpedeBumping();
 }
 
 void Movable::AddWayPoint(const Point &Des)
@@ -2234,105 +2342,63 @@ void Movable::AddWayPoint(const Point &Des)
 	while(endNode->Next) {
 		endNode = endNode->Next;
 	}
-	Point p(endNode->x * 16, endNode->y * 12);
+	Point p(endNode->x, endNode->y);
 	area->ClearSearchMapFor(this);
-	PathNode *path2 = area->FindPath( p, Des, size );
+	PathNode *path2 = area->FindPath(p, Des, size);
 	endNode->Next = path2;
 	//probably it is wise to connect it both ways?
 	path2->Parent = endNode;
 }
 
-void Movable::FixPosition()
-{
-	if (Type!=ST_ACTOR) {
-		return;
-	}
-	Actor *actor = (Actor *) this;
-	if (actor->GetStat(IE_DONOTJUMP)&DNJ_BIRD ) {
-		return;
-	}
-	//before fixposition, you should remove own shadow
-	area->ClearSearchMapFor(this);
-	Pos.x/=16;
-	Pos.y/=12;
-	GetCurrentArea()->AdjustPosition(Pos);
-	Pos.x=Pos.x*16+8;
-	Pos.y=Pos.y*12+6;
-}
-
+// This function is called at each tick if an actor is following another actor
+// Therefore it's rate-limited to avoid actors being stuck as they keep pathfinding
 void Movable::WalkTo(const Point &Des, int distance)
 {
-	Point from;
-
-	// maybe caller should be responsible for this
-	if ((Des.x/16 == Pos.x/16) && (Des.y/12 == Pos.y/12)) {
-		ClearPath();
+	// Only rate-limit when moving
+	if ((GetPath() || InMove()) && prevTicks && Ticks < prevTicks + 2) {
 		return;
 	}
 
-	// the prev_step stuff is a naive attempt to allow re-pathing while moving
-	PathNode *prev_step = NULL;
-	unsigned char old_stance = StanceID;
-	if (step && step->Next) {
-		// don't interrupt in the middle of a step; path from the next one
-		prev_step = new PathNode(*step);
-		from.x = ( step->Next->x * 16 ) + 8;
-		from.y = ( step->Next->y * 12 ) + 6;
+	Actor *actor = nullptr;
+	if (Type == ST_ACTOR) actor = (Actor*)this;
+
+	prevTicks = Ticks;
+	Destination = Des;
+	if (pathAbandoned) {
+		Log(DEBUG, "WalkTo", "%s: Path was just abandoned", GetName(0));
+		ClearPath(true);
+		return;
 	}
 
-	ClearPath();
-	if (!prev_step) {
-		FixPosition();
-		from = Pos;
+	if (Pos.x / 16 == Des.x / 16 && Pos.y / 12 == Des.y / 12) {
+		ClearPath(true);
+		return;
 	}
-	area->ClearSearchMapFor(this);
-	if (distance) {
-		path = area->FindPathNear( from, Des, size, distance );
-	} else {
-		path = area->FindPath( from, Des, size, distance );
+
+	if (BlocksSearchMap()) area->ClearSearchMapFor(this);
+	PathNode *newPath = area->FindPath(Pos, Des, size, distance, PF_SIGHT|PF_ACTORS_ARE_BLOCKING, actor);
+	if (!newPath && actor && actor->ValidTarget(GA_CAN_BUMP)) {
+		Log(DEBUG, "WalkTo", "%s re-pathing ignoring actors", GetName(0));
+		newPath = area->FindPath(Pos, Des, size, distance, PF_SIGHT, actor);
 	}
-	//ClearPath sets destination, so Destination must be set after it
-	//also we should set Destination only if there is a walkable path
-	if (path) {
-		Destination = Des;
 
-		if (prev_step) {
-			// we want to smoothly continue, please
-			// this all needs more thought! but it seems to work okay
-			StanceID = old_stance;
-
-			if (path->Next) {
-				// this is a terrible hack to make up for the
-				// pathfinder orienting the first node wrong
-				// should be fixed in pathfinder and not here!
-				Point next, follow;
-				next.x = path->x; next.y = path->y;
-				follow.x = path->Next->x;
-				follow.y = path->Next->y;
-				path->orient = GetOrient(follow, next);
-			}
-
-			// then put the prev_step at the beginning of the path
-			prev_step->Next = path;
-			path->Parent = prev_step;
-			path = prev_step;
-
-			step = path;
-		}
-	} else {
-		// pathing failed
-		if (prev_step) {
-			delete( prev_step );
-			FixPosition();
+	if (newPath) {
+		ClearPath(false);
+		path = newPath;
+		step = path;
+	}  else {
+		pathfindingDistance = std::max(size, distance);
+		if (BlocksSearchMap()) {
+			area->BlockSearchMap(Pos, size, IsPC() ? PATH_MAP_PC : PATH_MAP_NPC);
 		}
 	}
 }
 
-void Movable::RunAwayFrom(const Point &Des, int PathLength, int flags)
+void Movable::RunAwayFrom(const Point &Des, int PathLength, bool noBackAway)
 {
-	ClearPath();
+	ClearPath(true);
 	area->ClearSearchMapFor(this);
-	path = area->RunAway( Pos, Des, size, PathLength, flags );
+	path = area->RunAway(Pos, Des, size, PathLength, !noBackAway, Type == ST_ACTOR ? (Actor*)this : NULL);
 }
 
 void Movable::RandomWalk(bool can_stop, bool run)
@@ -2341,52 +2407,76 @@ void Movable::RandomWalk(bool can_stop, bool run)
 		return;
 	}
 	//if not continous random walk, then stops for a while
-	if (can_stop && !RAND(0,3)) {
-		SetWait(RAND(7,14));
+	if (can_stop) {
+		Region vp = core->GetVideoDriver()->GetViewport();
+		if (!vp.PointInside(Pos)) {
+			SetWait(AI_UPDATE_TIME * core->Roll(1, 40, 0));
+			return;
+		}
+		// a 50/50 chance to move or do a spin (including its own wait)
+		if (RAND(1, 2) == 1) {
+			Action *me = ParamCopy(CurrentAction);
+			Action *turnAction = GenerateAction("RandomTurn()");
+			// only spin once before relinquishing control back
+			turnAction->int0Parameter = 3;
+			// remove and readd ourselves, so the turning gets a chance to run
+			ReleaseCurrentAction();
+			AddActionInFront(me);
+			AddActionInFront(turnAction);
+			return;
+		}
+	}
+
+	// handle the RandomWalkTime variants, which only count moves
+	if (CurrentAction->int0Parameter && !CurrentAction->int1Parameter) {
+		// first run only
+		CurrentAction->int1Parameter = 1;
+		CurrentAction->int0Parameter++;
+	}
+	if (CurrentAction->int0Parameter) {
+		CurrentAction->int0Parameter--;
+	}
+	if (CurrentAction->int1Parameter && !CurrentAction->int0Parameter) {
+		ReleaseCurrentAction();
 		return;
 	}
+
+	randomWalkCounter++;
+	if (randomWalkCounter > MAX_RAND_WALK) {
+		randomWalkCounter = 0;
+		WalkTo(HomeLocation);
+		return;
+	}
+
 	if (run) {
 		InternalFlags|=IF_RUNNING;
 	}
-	//the commenting-out of the clear search map call was removed in 0.4.0
-	//if you want to put it back for some reason, check
-	//if the searchmap is not eaten up
-	area->ClearSearchMapFor(this);
-	Point p = Pos;
 
-	//selecting points around a circle's edge around actor (didn't work better)
-	//int x = core->Roll(1,100,-50);
-	//p.x+=x;
-	//p.y+=(int) sqrt(100-x*x);
-
-	//selecting points in a square around actor (by default -25 to +25)
-	short x1 = std::max(p.x - 25, 0);
-	short x2 = std::min(p.x + 25, area->GetWidth() * 16);
-	short y1 = std::max(p.y - 25, 0);
-	short y2 = std::min(p.y + 25, area->GetHeight() * 12);
-	if (maxWalkDistance > 0) {
-		short minx = std::max(HomeLocation.x - maxWalkDistance, 0);
-		short maxx = std::min(HomeLocation.x + maxWalkDistance, area->GetWidth() * 16);
-		short miny = std::max(HomeLocation.y - maxWalkDistance, 0);
-		short maxy = std::min(HomeLocation.y + maxWalkDistance, area->GetHeight() * 12);
-
-		if (p.x <= minx) x2 = p.x;
-		else if (p.x >= maxx) x1 = p.x;
-		if (p.y <= miny) y2 = p.y;
-		else if (p.y >= maxy) y1 = p.y;
+	if (BlocksSearchMap()) {
+		area->ClearSearchMapFor(this);
 	}
-	p.x += core->Roll(1, x2 - x1 + 1, x1 - p.x - 1);
-	p.y += core->Roll(1, y2 - y1 + 1, y1 - p.y - 1);
 
 	//the 5th parameter is controlling the orientation of the actor
 	//0 - back away, 1 - face direction
-	path = area->RunAway( Pos, p, size, 50, 1 );
+	path = area->RandomWalk(Pos, size, maxWalkDistance ? maxWalkDistance : 5, Type == ST_ACTOR ? (Actor*)this : NULL);
+	if (BlocksSearchMap()) {
+		area->BlockSearchMap(Pos, size, IsPC() ? PATH_MAP_PC : PATH_MAP_NPC);
+	}
+	if (path) {
+		Destination = Point(path->x, path->y);
+	} else {
+		randomWalkCounter = 0;
+		WalkTo(HomeLocation);
+		return;
+	}
+
 }
 
 void Movable::MoveTo(const Point &Des)
 {
 	area->ClearSearchMapFor(this);
 	Pos = Des;
+	oldPos = Des;
 	Destination = Des;
 	if (BlocksSearchMap()) {
 		area->BlockSearchMap( Pos, size, IsPC()?PATH_MAP_PC:PATH_MAP_NPC);
@@ -2396,19 +2486,24 @@ void Movable::MoveTo(const Point &Des)
 void Movable::Stop()
 {
 	Scriptable::Stop();
-	ClearPath();
+	ClearPath(true);
 }
 
-void Movable::ClearPath()
+void Movable::ClearPath(bool resetDestination)
 {
-	//this is to make sure attackers come to us
-	//make sure ClearPath doesn't screw Destination (in the rare cases Destination
-	//is set before ClearPath
-	Destination = Pos;
-	if (StanceID==IE_ANI_WALK || StanceID==IE_ANI_RUN) {
-		StanceID = IE_ANI_AWAKE;
+	pathAbandoned = false;
+
+	if (resetDestination) {
+		//this is to make sure attackers come to us
+		//make sure ClearPath doesn't screw Destination (in the rare cases Destination
+		//is set before ClearPath
+		Destination = Pos;
+
+		if (StanceID == IE_ANI_WALK || StanceID == IE_ANI_RUN) {
+			StanceID = IE_ANI_AWAKE;
+		}
+		InternalFlags &= ~IF_NORETICLE;
 	}
-	InternalFlags&=~IF_NORETICLE;
 	PathNode* thisNode = path;
 	while (thisNode) {
 		PathNode* nextNode = thisNode->Next;

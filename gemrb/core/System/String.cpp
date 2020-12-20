@@ -23,6 +23,7 @@
 #include "Interface.h"
 
 #include <stdlib.h>
+#include <cerrno>
 #include <ctype.h>
 #include <cwctype>
 #ifdef WIN32
@@ -34,7 +35,6 @@
 
 #if HAVE_ICONV
 #include <iconv.h>
-#include <cerrno>
 #endif
 
 namespace GemRB {
@@ -86,8 +86,10 @@ static String* StringFromEncodedData(const ieByte* string, const EncodingStruct&
 				}
 
 				ch = currentChr & ((1 << (7 - nb)) - 1);
-				while (--nb)
-					ch <<= 6, ch |= string[++i] & 0x3f;
+				while (--nb) {
+					ch <<= 6;
+					ch |= string[++i] & 0x3f;
+				}
 			} else {
 				ch = (string[++i] << 8) + currentChr;
 			}

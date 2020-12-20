@@ -515,12 +515,11 @@ def IsDualSwap (actor, override=None):
 	if Dual[0] > 1:
 		BaseClass = GetClassRowName(Dual[1], "index")
 	else:
-		BaseClass = GetKitIndex (actor)
-		BaseClass = CommonTables.KitList.GetValue (BaseClass, 7)
+		BaseClass = CommonTables.KitList.GetValue (Dual[1], 7)
 		if BaseClass == "*":
 			# mod boilerplate
 			return 0
-		BaseClass = GetClassRowName(BaseClass, "index")
+		BaseClass = GetClassRowName(BaseClass, "class")
 
 	# if our old class is the first class, we need to swap
 	if Class[0] == BaseClass:
@@ -696,7 +695,7 @@ def SetupDamageInfo (pc, Button, Window):
 	hp_max = GemRB.GetPlayerStat (pc, IE_MAXHITPOINTS)
 	state = GemRB.GetPlayerStat (pc, IE_STATE_ID)
 
-	if hp_max < 1 or hp is "?":
+	if hp_max < 1 or hp == "?":
 		ratio = 0.0
 	else:
 		ratio = (hp+0.0) / hp_max
@@ -734,7 +733,7 @@ def SetupDamageInfo (pc, Button, Window):
 		hpBar.SetFlags (IE_GUI_BUTTON_NO_IMAGE, OP_OR)
 
 	ratio_str = ""
-	if hp is not "?":
+	if hp != "?":
 		ratio_str = "\n%d/%d" %(hp, hp_max)
 	Button.SetTooltip (GemRB.GetPlayerName (pc, 1) + ratio_str)
 
@@ -774,6 +773,14 @@ def SetCurrentDateTokens (stat, plural=False):
 		time += GemRB.GetString (10700)
 
 	return time
+
+def SetSaveDir():
+	if GameCheck.IsIWD1() or GameCheck.IsIWD2():
+		GemRB.SetToken ("SaveDir", "mpsave")
+	elif GameCheck.IsBG1() and GemRB.GetVar ("PlayMode") == 1:
+		GemRB.SetToken ("SaveDir", "mpsave")
+	else:
+		GemRB.SetToken ("SaveDir", "save")
 
 # gray out window or mark it as visible depending on the actor's state
 # Always greys it out for actors that are: dead, berserking

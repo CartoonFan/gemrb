@@ -21,6 +21,8 @@
 #include "System/Logger.h"
 #include "System/StringBuffer.h"
 
+#include "Interface.h"
+
 #if defined(__sgi)
 #  include <stdarg.h>
 #else
@@ -47,8 +49,10 @@ void InitializeLogging()
 
 void AddLogger(Logger* logger)
 {
-	if (logger)
-		theLogger.push_back(logger);
+	// check if logging was disabled in settings first
+	if (!core->Logging) return;
+
+	if (logger) theLogger.push_back(logger);
 }
 
 void RemoveLogger(Logger* logger)
@@ -72,29 +76,17 @@ static void vLog(log_level level, const char* owner, const char* message, log_co
 	if (theLogger.empty())
 		return;
 
-	// Copied from System/StringBuffer.cpp
-#ifndef __va_copy
-	// Don't try to be smart.
-	// Assume this is long enough. If not, message will be truncated.
-	// MSVC6 has old vsnprintf that doesn't give length
-	const size_t len = 4095;
-#else
     va_list ap_copy;
-    // __va_copy should always be defined
-    // va_copy is only defined by C99 (C++11 and up)
-    __va_copy(ap_copy, ap);
+    va_copy(ap_copy, ap);
     const size_t len = vsnprintf(NULL, 0, message, ap_copy);
     va_end(ap_copy);
-#endif
 
-#if defined(__GNUC__)
-	__extension__ // Variable-length arrays
-#endif
-	char buf[len+1];
+	char *buf = new char[len+1];
 	vsnprintf(buf, len + 1, message, ap);
 	for (size_t i = 0; i < theLogger.size(); ++i) {
 		theLogger[i]->log(level, owner, buf, color);
 	}
+	delete[] buf;
 }
 
 void print(const char *message, ...)
@@ -123,6 +115,11 @@ void Log(log_level level, const char* owner, const char* message, ...)
 	va_start(ap, message);
 	vLog(level, owner, message, WHITE, ap);
 	va_end(ap);
+}
+
+void LogVA(log_level level, const char* owner, const char* message, va_list args)
+{
+	vLog(level, owner, message, WHITE, args);
 }
 
 void Log(log_level level, const char* owner, StringBuffer const& buffer)

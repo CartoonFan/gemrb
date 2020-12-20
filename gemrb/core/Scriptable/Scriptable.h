@@ -23,6 +23,7 @@
 
 #include "exports.h"
 
+#include "CharAnimations.h"
 #include "Variables.h"
 
 #include <list>
@@ -40,6 +41,7 @@ class Highlightable;
 class InfoPoint;
 class Map;
 class Movable;
+class Object;
 struct PathNode;
 class Scriptable;
 class Selectable;
@@ -126,31 +128,51 @@ class SpriteCover;
 #define XP_DISARM     1
 #define XP_LEARNSPELL 2
 
+#define MAX_PATH_TRIES 8
+#define MAX_BUMP_BACK_TRIES 16
+#define MAX_RAND_WALK 10
+
 typedef enum ScriptableType { ST_ACTOR = 0, ST_PROXIMITY = 1, ST_TRIGGER = 2,
 ST_TRAVEL = 3, ST_DOOR = 4, ST_CONTAINER = 5, ST_AREA = 6, ST_GLOBAL = 7 } ScriptableType;
 
 enum {
-	trigger_acquired = 0x1,
+	trigger_acquired = 0x1, // unused and broken in the original
 	trigger_attackedby = 0x2,
 	trigger_help = 0x3,
 	trigger_joins = 0x4,
 	trigger_leaves = 0x5,
 	trigger_receivedorder = 0x6,
-	trigger_said = 0x7,
+	trigger_said = 0x7, // unused in the originals; if added, don't forget to set LastTrigger
 	trigger_turnedby = 0x8,
 	trigger_unusable = 0x9,
+	trigger_alignment = 0xa,
+	trigger_allegiance = 0xb,
+	trigger_class = 0xc,
+	trigger_exists = 0xd,
+	trigger_general = 0xe,
+	trigger_hpgt = 0x11,
+	trigger_morale = 0x14,
+	trigger_race = 0x17,
+	trigger_range = 0x18,
+	trigger_reputation = 0x19,
+	trigger_specifics = 0x1d,
 	trigger_hitby = 0x20,
 	trigger_hotkey = 0x21,
-	trigger_timerexpired = 0x22,
+	trigger_timerexpired = 0x22, // handled internally through TimerExpired
 	trigger_trigger = 0x24,
 	trigger_die = 0x25,
 	trigger_targetunreachable = 0x26,
 	trigger_heard = 0x2f,
 	trigger_becamevisible = 0x33,
 	trigger_oncreation = 0x36,
+	trigger_statecheck = 0x37,
+	trigger_reaction = 0x3c,
+	trigger_inparty = 0x43,
+	trigger_checkstat = 0x44,
 	trigger_died = 0x4a,
 	trigger_killed = 0x4b,
 	trigger_entered = 0x4c,
+	trigger_gender = 0x4c,
 	trigger_opened = 0x52,
 	trigger_closed = 0x53,
 	trigger_detected = 0x54,
@@ -163,7 +185,7 @@ enum {
 	trigger_disarmfailed  = 0x5f,
 	trigger_picklockfailed = 0x60,
 	trigger_clicked = 0x70,
-	trigger_triggerclick = 0x79, // pst
+	trigger_triggerclick = 0x79, // pst; we map it to trigger_clicked
 	trigger_traptriggered = 0x87, // bg2
 	trigger_partymemberdied = 0x88, // bg2
 	trigger_spellcast = 0x91, // bg2
@@ -174,7 +196,7 @@ enum {
 	trigger_harmlessclosed = 0x9e, // pst
 	trigger_harmlessentered = 0x9f, // pst
 	trigger_spellcastonme = 0xa1, // bg2
-	trigger_nulldialog = 0xa4, // pst
+	trigger_nulldialog = 0xa4, // pst, checked directly in NullDialog
 	trigger_wasindialog = 0xa5, // pst
 	trigger_spellcastpriest = 0xa6, // bg2
 	trigger_spellcastinnate = 0xa7, // bg2
@@ -275,6 +297,7 @@ public:
 	ieDword LastSummoner;
 	ieDword LastFollowed; // gemrb extension (LeaderOf)
 	ieDword LastMarked; // iwd2
+	ieDword MyTarget = 0; // iwd2, has nothing to do with LastTarget
 
 	int LastMarkedSpell; // iwd2
 
@@ -299,7 +322,7 @@ public:
 	void SetSpellResRef(ieResRef resref);
 	void SetWait(unsigned long time);
 	unsigned long GetWait() const;
-	void LeaveDialog();
+	void LeftDialog();
 	void Interrupt();
 	void NoInterrupt();
 	void Hide();
@@ -312,11 +335,10 @@ public:
 	const char* GetScriptName() const;
 	Map* GetCurrentArea() const;
 	void SetMap(Map *map);
-	void SetScript(int index, GameScript* script);
 	void SetOverheadText(const String& text, bool display = true);
 	const String& GetOverheadText() { return OverheadText; };
 	bool DisplayOverheadText(bool);
-	bool OverheadTextIsDisplaying() { return overheadTextDisplaying; }
+	bool OverheadTextIsDisplaying() const { return overheadTextDisplaying; }
 	void FixHeadTextPos();
 	void SetScriptName(const char* text);
 	//call this to enable script running as soon as possible
@@ -339,9 +361,10 @@ public:
 	//true condition (whole triggerblock returned true)
 	void InitTriggers();
 	void AddTrigger(TriggerEntry trigger);
+	void SetLastTrigger(ieDword triggerID, ieDword globalID);
 	bool MatchTrigger(unsigned short id, ieDword param = 0);
-	bool MatchTriggerWithObject(unsigned short id, class Object *obj, ieDword param = 0);
-	const TriggerEntry *GetMatchingTrigger(unsigned short id, unsigned int notflags = 0);
+	bool MatchTriggerWithObject(short unsigned int id, const Object *obj, ieDword param = 0) const;
+	const TriggerEntry *GetMatchingTrigger(unsigned short id, unsigned int notflags = 0) const;
 	void SendTriggerToAll(TriggerEntry entry);
 	/* re/draws overhead text on the map screen */
 	void DrawOverheadText(const Region &screen);
@@ -440,7 +463,7 @@ public:
 		return NULL;
 	}
 	void SetTrapDetected(int x);
-	void TryDisarm(Actor *actor);
+	void TryDisarm(const Actor *actor);
 	//detect trap, set skill to 256 if you want sure fire
 	void DetectTrap(int skill, ieDword actorID);
 	//returns true if trap is visible, only_detected must be true
@@ -459,9 +482,28 @@ private: //these seem to be sensitive, so get protection
 
 	PathNode* path; //whole path
 	PathNode* step; //actual step
+	unsigned int prevTicks;
+	int bumpBackTries;
+	bool pathAbandoned;
 protected:
 	ieDword timeStartStep;
+	//the # of previous tries to pick up a new walkpath
+	int pathTries;
+	int randomBackoff;
+	Point oldPos;
+	bool bumped;
+	int pathfindingDistance;
+	int randomWalkCounter;
 public:
+	inline int GetRandomBackoff() const
+	{
+		return randomBackoff;
+	}
+	void Backoff();
+	inline void DecreaseBackoff()
+	{
+		randomBackoff--;
+	}
 	Movable(ScriptableType type);
 	virtual ~Movable(void);
 	Point Destination;
@@ -470,15 +512,27 @@ public:
 	Point HomeLocation;//spawnpoint, return here after rest
 	ieWord maxWalkDistance;//maximum random walk distance from home
 public:
-	PathNode *GetNextStep(int x);
-	PathNode *GetPath() { return path; };
-	int GetPathLength();
+	inline void ImpedeBumping() { oldPos = Pos; bumped = false; }
+	void AdjustPosition();
+	void BumpAway();
+	void BumpBack();
+	inline bool IsBumped() const { return bumped; }
+	PathNode *GetNextStep(int x) const;
+	inline PathNode *GetPath() const { return path; };
+	inline int GetPathTries() const	{ return pathTries; }
+	inline void IncrementPathTries() { pathTries++; }
+	inline void ResetPathTries() { pathTries = 0; }
+	int GetPathLength() const;
 //inliners to protect data consistency
 	inline PathNode * GetStep() {
 		if (!step) {
 			DoStep((unsigned int) ~0);
 		}
 		return step;
+	}
+
+	inline bool IsMoving() const {
+		return (StanceID == IE_ANI_WALK || StanceID == IE_ANI_RUN);
 	}
 
 	unsigned char GetNextFace();
@@ -494,19 +548,19 @@ public:
 	void SetStance(unsigned int arg);
 	void SetOrientation(int value, bool slow);
 	void SetAttackMoveChances(ieWord *amc);
-	virtual bool DoStep(unsigned int walk_speed, ieDword time = 0);
+	virtual void DoStep(unsigned int walkScale, ieDword time = 0);
 	void AddWayPoint(const Point &Des);
-	void RunAwayFrom(const Point &Des, int PathLength, int flags);
+	void RunAwayFrom(const Point &Des, int PathLength, bool noBackAway);
 	void RandomWalk(bool can_stop, bool run);
-	void MoveLine(int steps, int Pass, ieDword Orient);
-	void FixPosition();
+	int GetRandomWalkCounter() const { return randomWalkCounter; };
+	void MoveLine(int steps, ieDword Orient);
 	void WalkTo(const Point &Des, int MinDistance = 0);
 	void MoveTo(const Point &Des);
 	void Stop();
-	void ClearPath();
+	void ClearPath(bool resetDestination = true);
 
 	/* returns the most likely position of this actor */
-	Point GetMostLikelyPosition();
+	Point GetMostLikelyPosition() const;
 	virtual bool BlocksSearchMap() const = 0;
 };
 

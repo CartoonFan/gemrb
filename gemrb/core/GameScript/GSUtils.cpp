@@ -127,7 +127,7 @@ void InitScriptTables()
 	}
 }
 
-int GetReaction(Actor *target, Scriptable *Sender)
+int GetReaction(const Actor *target, const Scriptable *Sender)
 {
 	int chr, rep, reaction;
 
@@ -146,29 +146,33 @@ int GetReaction(Actor *target, Scriptable *Sender)
 
 	// add -4 penalty when dealing with racial enemies
 	if (Sender && target->GetRangerLevel() && (Sender->Type == ST_ACTOR) ) {
-		reaction -= target->GetRacialEnemyBonus((Actor *) Sender);
+		reaction -= target->GetRacialEnemyBonus((const Actor *) Sender);
 	}
 
 	return reaction;
 }
 
-int GetHappiness(Scriptable* Sender, int reputation)
+int GetHappiness(const Scriptable *Sender, int reputation)
 {
 	if (Sender->Type != ST_ACTOR) {
 		return 0;
 	}
-	Actor* ab = ( Actor* ) Sender;
+	const Actor *ab = (const Actor *) Sender;
 	int alignment = ab->GetStat(IE_ALIGNMENT)&AL_GE_MASK; //good / evil
+	// handle unset alignment
+	if (!alignment) {
+		alignment = AL_GE_NEUTRAL;
+	}
 	reputation = Clamp(reputation, 10, 200);
 	return happiness[alignment-1][reputation/10-1];
 }
 
-int GetHPPercent(Scriptable* Sender)
+int GetHPPercent(const Scriptable *Sender)
 {
 	if (Sender->Type != ST_ACTOR) {
 		return 0;
 	}
-	Actor* ab = ( Actor* ) Sender;
+	const Actor *ab = (const Actor *) Sender;
 	int hp1 = ab->GetStat(IE_MAXHITPOINTS);
 	if (hp1<1) {
 		return 0;
@@ -392,7 +396,7 @@ void TransformItemCore(Actor *actor, Action *parameters, bool onlyone)
 }
 
 //check if an inventory (container or actor) has item (could be recursive ?)
-bool HasItemCore(Inventory *inventory, const ieResRef itemname, ieDword flags)
+bool HasItemCore(const Inventory *inventory, const ieResRef itemname, ieDword flags)
 {
 	if (inventory->HasItem(itemname, flags)) {
 		return true;
@@ -493,6 +497,13 @@ void DisplayStringCore(Scriptable* const Sender, int Strref, int flags)
 		}
 	}
 
+	// PST does not echo verbal constants in the console, their strings
+	// actually contain development related identifying comments
+	// thus the console flag is unset.
+	if (core->HasFeature(GF_ONSCREEN_TEXT)) {
+		flags &= ~DS_CONSOLE;
+	}
+
 	if ((Strref != -1) && !soundRef[0]) {
 		StringBlock sb = core->strings->GetStringBlock( Strref );
 		memcpy(Sound, sb.Sound, sizeof(ieResRef) );
@@ -539,19 +550,17 @@ void DisplayStringCore(Scriptable* const Sender, int Strref, int flags)
 	}
 }
 
-int CanSee(Scriptable* Sender, Scriptable* target, bool range, int seeflag)
+int CanSee(const Scriptable *Sender, const Scriptable *target, bool range, int seeflag)
 {
-	Map *map;
-
 	if (target->Type==ST_ACTOR) {
-		Actor *tar = (Actor *) target;
+		const Actor *tar = (const Actor *) target;
 
 		if (!tar->ValidTarget(seeflag, Sender)) {
 			return 0;
 		}
 	}
 
-	map = target->GetCurrentArea();
+	const Map *map = target->GetCurrentArea();
 	//if (!(seeflag&GA_GLOBAL)) {
 		if (!map || map!=Sender->GetCurrentArea() ) {
 			return 0;
@@ -562,7 +571,7 @@ int CanSee(Scriptable* Sender, Scriptable* target, bool range, int seeflag)
 		unsigned int dist;
 		bool los = true;
 		if (Sender->Type == ST_ACTOR) {
-			Actor* snd = ( Actor* ) Sender;
+			const Actor *snd = (const Actor *) Sender;
 			dist = snd->Modified[IE_VISUALRANGE];
 		} else {
 			dist = VOODOO_VISUAL_RANGE;
@@ -582,7 +591,7 @@ int CanSee(Scriptable* Sender, Scriptable* target, bool range, int seeflag)
 
 //non actors can see too (reducing function to LOS)
 //non actors can be seen too (reducing function to LOS)
-int SeeCore(Scriptable* Sender, Trigger* parameters, int justlos)
+int SeeCore(Scriptable *Sender, const Trigger *parameters, int justlos)
 {
 	//see dead; unscheduled actors are never visible, though
 	int flags = GA_NO_UNSCHEDULED;
@@ -592,7 +601,7 @@ int SeeCore(Scriptable* Sender, Trigger* parameters, int justlos)
 	} else {
 		flags |= GA_NO_DEAD;
 	}
-	Scriptable* tar = GetActorFromObject( Sender, parameters->objectParameter, flags );
+	const Scriptable *tar = GetActorFromObject(Sender, parameters->objectParameter, flags);
 	/* don't set LastSeen if this isn't an actor */
 	if (!tar) {
 		return 0;
@@ -606,15 +615,18 @@ int SeeCore(Scriptable* Sender, Trigger* parameters, int justlos)
 	//both are actors
 	if (CanSee(Sender, tar, true, flags) ) {
 		if (justlos) {
-			//TODO: maybe set the object references here too
+			//TODO: maybe set the other object references here too
+			Sender->LastTrigger = tar->GetGlobalID();
 			return 1;
 		}
+		// NOTE: Detect supposedly doesn't set LastMarked — disable on GA_DETECT if needed
 		if (Sender->Type==ST_ACTOR && tar->Type==ST_ACTOR && Sender!=tar) {
 			Actor* snd = ( Actor* ) Sender;
 			//additional checks for invisibility?
 			snd->LastSeen = tar->GetGlobalID();
 			snd->LastMarked = tar->GetGlobalID();
 		}
+		Sender->LastTrigger = tar->GetGlobalID();
 		return 1;
 	}
 	return 0;
@@ -861,14 +873,14 @@ void ChangeAnimationCore(Actor *src, const char *resref, bool effect)
 	Actor *tar = gamedata->GetCreature(resref);
 	if (tar) {
 		Map *map = src->GetCurrentArea();
-		map->AddActor( tar, true );
 		Point pos = src->Pos;
-		tar->SetOrientation(src->GetOrientation(), false );
 		// make sure to copy the HP, to avoid things like magically-healing trolls
-		tar->BaseStats[IE_HITPOINTS]=src->BaseStats[IE_HITPOINTS];
+		tar->BaseStats[IE_HITPOINTS] = src->BaseStats[IE_HITPOINTS];
+		tar->SetOrientation(src->GetOrientation(), false);
 		src->DestroySelf();
 		// can't SetPosition while the old actor is taking the spot
-		tar->SetPosition(pos, 1);
+		map->AddActor(tar, true);
+		tar->SetPosition(pos, 1, 8*effect, 8*effect);
 		if (effect) {
 			CreateVisualEffectCore(tar, tar->Pos, "spsmpuff", 1);
 		}
@@ -936,7 +948,7 @@ static void GetTalkPositionFromScriptable(Scriptable* scr, Point &position)
 	}
 }
 
-void GetPositionFromScriptable(Scriptable* scr, Point &position, bool dest)
+void GetPositionFromScriptable(const Scriptable *scr, Point &position, bool dest)
 {
 	if (!dest) {
 		position = scr->Pos;
@@ -948,16 +960,16 @@ void GetPositionFromScriptable(Scriptable* scr, Point &position, bool dest)
 			break;
 		case ST_ACTOR:
 		//if there are other moveables, put them here
-			position = ((Movable *) scr)->GetMostLikelyPosition();
+			position = ((const Movable *) scr)->GetMostLikelyPosition();
 			break;
 		case ST_TRIGGER: case ST_PROXIMITY: case ST_TRAVEL:
-			if (((InfoPoint *) scr)->GetUsePoint()) {
-				position=((InfoPoint *) scr)->UsePoint;
+			if (((const InfoPoint *) scr)->GetUsePoint()) {
+				position = ((const InfoPoint *) scr)->UsePoint;
 				break;
 			}
 		// intentional fallthrough
 		case ST_DOOR: case ST_CONTAINER:
-			position=((Highlightable *) scr)->TrapLaunch;
+			position = ((const Highlightable *) scr)->TrapLaunch;
 	}
 }
 
@@ -967,9 +979,8 @@ void BeginDialog(Scriptable* Sender, Action* parameters, int Flags)
 {
 	Scriptable* tar = NULL, *scr = NULL;
 
-	if (InDebug&ID_VARIABLES) {
-		Log(MESSAGE, "GSUtils", "BeginDialog core");
-	}
+	ScriptDebugLog(ID_VARIABLES, "BeginDialog core");
+
 	tar = GetStoredActorFromObject(Sender, parameters->objects[1], GA_NO_DEAD);
 	if (Flags & BD_OWN) {
 		scr = tar;
@@ -1279,17 +1290,18 @@ void MoveToObjectCore(Scriptable *Sender, Action *parameters, ieDword flags, boo
 		Sender->ReleaseCurrentAction();
 		return;
 	}
-	Scriptable* target = GetStoredActorFromObject( Sender, parameters->objects[1] );
+	const Scriptable *target = GetStoredActorFromObject(Sender, parameters->objects[1]);
 	if (!target) {
 		Sender->ReleaseCurrentAction();
 		return;
 	}
 	Actor* actor = ( Actor* ) Sender;
 	Point dest = target->Pos;
-	if (target->Type == ST_TRIGGER && ((InfoPoint *)target)->GetUsePoint()) {
-		dest = ((InfoPoint *)target)->UsePoint;
+	if (target->Type == ST_TRIGGER && ((const InfoPoint *)target)->GetUsePoint()) {
+		dest = ((const InfoPoint *)target)->UsePoint;
 	}
 	if (untilsee && CanSee(actor, target, true, 0) ) {
+		Sender->LastSeen = target->GetGlobalID();
 		Sender->ReleaseCurrentAction();
 		return;
 	} else {
@@ -1566,6 +1578,13 @@ static void ParseObject(const char *&str,const char *&src, Object *&object)
 	}
 }
 
+// some iwd2 dialogs use # instead of " for delimiting parameters (11phaen, 30gobpon, 11oswald)
+// BUT at the same time, some bg2 mod prefixes use it too (eg. Tashia)
+inline bool paramDelimiter(const char *src)
+{
+	return *src == '"' || (*src == '#' && (*(src-1) == '(' || *(src-1) == ',' || *(src+1) == ')'));
+}
+
 /* this function was lifted from GenerateAction, to make it clearer */
 Action* GenerateActionCore(const char *src, const char *str, unsigned short actionID)
 {
@@ -1717,8 +1736,8 @@ Action* GenerateActionCore(const char *src, const char *str, unsigned short acti
 				}
 				//breaking on ',' in case of a monkey attack
 				//fixes bg1:melicamp.dlg, bg1:sharte.dlg, bg2:udvith.dlg
-				//if strings ever need a , inside, this is a FIXME
-				while (*src != '"' && *src !=',') {
+				// NOTE: if strings ever need a , inside, this is will need to change
+				while (*src != ',' && !paramDelimiter(src)) {
 					if (*src == 0) {
 						delete newAction;
 						return NULL;
@@ -1730,7 +1749,7 @@ Action* GenerateActionCore(const char *src, const char *str, unsigned short acti
 					}
 					src++;
 				}
-				if (*src == '"') {
+				if (*src == '"' || *src == '#') {
 					src++;
 				}
 				*dst = 0;
@@ -1779,10 +1798,9 @@ Action* GenerateActionCore(const char *src, const char *str, unsigned short acti
 	return newAction;
 }
 
-void MoveNearerTo(Scriptable *Sender, Scriptable *target, int distance, int dont_release)
+void MoveNearerTo(Scriptable *Sender, const Scriptable *target, int distance, int dont_release)
 {
 	Point p;
-	Map *myarea, *hisarea;
 
 	if (Sender->Type != ST_ACTOR) {
 		Log(ERROR, "GameScript", "MoveNearerTo only works with actors");
@@ -1790,8 +1808,8 @@ void MoveNearerTo(Scriptable *Sender, Scriptable *target, int distance, int dont
 		return;
 	}
 
-	myarea = Sender->GetCurrentArea();
-	hisarea = target->GetCurrentArea();
+	const Map *myarea = Sender->GetCurrentArea();
+	const Map *hisarea = target->GetCurrentArea();
 	if (hisarea && hisarea!=myarea) {
 		target = myarea->GetTileMap()->GetTravelTo(hisarea->GetScriptName());
 
@@ -1814,7 +1832,7 @@ void MoveNearerTo(Scriptable *Sender, Scriptable *target, int distance, int dont
 		distance += ((Actor *)Sender)->size*10;
 	}
 	if (distance && target->Type == ST_ACTOR) {
-		distance += ((Actor *)target)->size*10;
+		distance += ((const Actor *) target)->size * 10;
 	}
 
 	MoveNearerTo(Sender, p, distance, dont_release);
@@ -1839,7 +1857,7 @@ int MoveNearerTo(Scriptable *Sender, const Point &p, int distance, int dont_rele
 
 	if (!actor->InMove() || actor->Destination != p) {
 		bool always_run = core->GetGameControl()->ShouldRun(actor);
-		actor->WalkTo(p, IF_RUNNING * always_run, distance);
+		actor->WalkTo(p, always_run ? IF_RUNNING : 0, distance);
 	}
 
 	if (!actor->InMove()) {
@@ -1890,7 +1908,7 @@ SrcVector *LoadSrc(const ieResRef resname)
 
 // checks the odd HasAdditionalRect / ADDITIONAL_RECT matching
 // also returns true if the trigger is supposed to succeed
-bool IsInObjectRect(const Point &pos, Region &rect)
+bool IsInObjectRect(const Point &pos, const Region &rect)
 {
 	if (!HasAdditionalRect) return true;
 	if (rect.w <= 0 || rect.h <= 0) return true;
@@ -2042,7 +2060,7 @@ Trigger *GenerateTriggerCore(const char *src, const char *str, int trIndex, int 
 				}
 				// some iwd2 dialogs use # instead of " for delimiting parameters (11phaen)
 				// BUT at the same time, some bg2 mod prefixes use it too (eg. Tashia)
-				while (*src != '"' && (*src != '#' || (*(src-1) != '(' && *(src-1) != ','))) {
+				while (!paramDelimiter(src)) {
 					if (*src == 0) {
 						delete newTrigger;
 						return NULL;
@@ -2106,10 +2124,7 @@ void SetVariable(Scriptable* Sender, const char* VarName, const char* Context, i
 {
 	char newVarName[8+33];
 
-	if (InDebug&ID_VARIABLES) {
-		Log(DEBUG, "GSUtils", "Setting variable(\"%s%s\", %d)", Context,
-			VarName, value );
-	}
+	ScriptDebugLog(ID_VARIABLES, "Setting variable(\"%s%s\", %d)", Context, VarName, value);
 
 	strlcpy( newVarName, Context, 7 );
 	if (strnicmp( newVarName, "MYAREA", 6 ) == 0) {
@@ -2130,14 +2145,12 @@ void SetVariable(Scriptable* Sender, const char* VarName, const char* Context, i
 		Map *map=game->GetMap(game->FindMap(newVarName));
 		if (map) {
 			map->locals->SetAt( VarName, value, NoCreate);
-		}
-		else if (InDebug&ID_VARIABLES) {
+		} else if (InDebug & ID_VARIABLES) {
 			Log(WARNING, "GameScript", "Invalid variable %s %s in setvariable",
 				Context, VarName);
 		}
-	}
-	else {
-		game->locals->SetAt( VarName, ( ieDword ) value, NoCreate );
+	} else {
+		game->locals->SetAt(VarName, value, NoCreate);
 	}
 }
 
@@ -2152,9 +2165,8 @@ void SetVariable(Scriptable* Sender, const char* VarName, ieDword value)
 		poi++;
 	}
 
-	if (InDebug&ID_VARIABLES) {
-		Log(DEBUG, "GSUtils", "Setting variable(\"%s\", %d)", VarName, value );
-	}
+	ScriptDebugLog(ID_VARIABLES, "Setting variable(\"%s\", %d)", VarName, value);
+
 	strlcpy( newVarName, VarName, 7 );
 	if (stricmp( newVarName, "MYAREA" ) == 0) {
 		Sender->GetCurrentArea()->locals->SetAt( poi, value, NoCreate );
@@ -2173,18 +2185,16 @@ void SetVariable(Scriptable* Sender, const char* VarName, ieDword value)
 		Map *map=game->GetMap(game->FindMap(newVarName));
 		if (map) {
 			map->locals->SetAt( poi, value, NoCreate);
-		}
-		else if (InDebug&ID_VARIABLES) {
+		} else if (InDebug & ID_VARIABLES) {
 			Log(WARNING, "GameScript", "Invalid variable %s in setvariable",
 				VarName);
 		}
-	}
-	else {
-		game->locals->SetAt( poi, ( ieDword ) value, NoCreate );
+	} else {
+		game->locals->SetAt(poi, value, NoCreate);
 	}
 }
 
-ieDword CheckVariable(Scriptable* Sender, const char* VarName, bool *valid)
+ieDword CheckVariable(const Scriptable *Sender, const char *VarName, bool *valid)
 {
 	char newVarName[8];
 	const char *poi;
@@ -2199,24 +2209,18 @@ ieDword CheckVariable(Scriptable* Sender, const char* VarName, bool *valid)
 
 	if (stricmp( newVarName, "MYAREA" ) == 0) {
 		Sender->GetCurrentArea()->locals->Lookup( poi, value );
-		if (InDebug&ID_VARIABLES) {
-			print("CheckVariable %s: %d", VarName, value);
-		}
+		ScriptDebugLog(ID_VARIABLES, "CheckVariable %s: %d", VarName, value);
 		return value;
 	}
 	if (stricmp( newVarName, "LOCALS" ) == 0) {
 		Sender->locals->Lookup( poi, value );
-		if (InDebug&ID_VARIABLES) {
-			print("CheckVariable %s: %d", VarName, value);
-		}
+		ScriptDebugLog(ID_VARIABLES, "CheckVariable %s: %d", VarName, value);
 		return value;
 	}
-	Game *game = core->GetGame();
+	const Game *game = core->GetGame();
 	if (HasKaputz && !stricmp(newVarName,"KAPUTZ") ) {
 		game->kaputz->Lookup( poi, value );
-		if (InDebug&ID_VARIABLES) {
-			print("CheckVariable %s: %d", VarName, value);
-		}
+		ScriptDebugLog(ID_VARIABLES, "CheckVariable %s: %d", VarName, value);
 		return value;
 	}
 	if (stricmp(newVarName,"GLOBAL") ) {
@@ -2227,21 +2231,16 @@ ieDword CheckVariable(Scriptable* Sender, const char* VarName, bool *valid)
 			if (valid) {
 				*valid=false;
 			}
-			if (InDebug&ID_VARIABLES) {
-				Log(WARNING, "GameScript", "Invalid variable %s in checkvariable",
-					VarName);
-			}
+			ScriptDebugLog(ID_VARIABLES, "Invalid variable %s in CheckVariable", VarName);
 		}
 	} else {
 		game->locals->Lookup( poi, value );
 	}
-	if (InDebug&ID_VARIABLES) {
-		print("CheckVariable %s: %d", VarName, value);
-	}
+	ScriptDebugLog(ID_VARIABLES, "CheckVariable %s: %d", VarName, value);
 	return value;
 }
 
-ieDword CheckVariable(Scriptable* Sender, const char* VarName, const char* Context, bool *valid)
+ieDword CheckVariable(const Scriptable *Sender, const char *VarName, const char *Context, bool *valid)
 {
 	char newVarName[8];
 	ieDword value = 0;
@@ -2249,9 +2248,7 @@ ieDword CheckVariable(Scriptable* Sender, const char* VarName, const char* Conte
 	strlcpy(newVarName, Context, 7);
 	if (stricmp( newVarName, "MYAREA" ) == 0) {
 		Sender->GetCurrentArea()->locals->Lookup( VarName, value );
-		if (InDebug&ID_VARIABLES) {
-			print("CheckVariable %s%s: %d", Context, VarName, value);
-		}
+		ScriptDebugLog(ID_VARIABLES, "CheckVariable %s%s: %d", Context, VarName, value);
 		return value;
 	}
 	if (stricmp( newVarName, "LOCALS" ) == 0) {
@@ -2260,17 +2257,13 @@ ieDword CheckVariable(Scriptable* Sender, const char* VarName, const char* Conte
 				*valid = false;
 			}
 		}
-		if (InDebug&ID_VARIABLES) {
-			print("CheckVariable %s%s: %d", Context, VarName, value);
-		}
+		ScriptDebugLog(ID_VARIABLES, "CheckVariable %s%s: %d", Context, VarName, value);
 		return value;
 	}
-	Game *game = core->GetGame();
+	const Game *game = core->GetGame();
 	if (HasKaputz && !stricmp(newVarName,"KAPUTZ") ) {
 		game->kaputz->Lookup( VarName, value );
-		if (InDebug&ID_VARIABLES) {
-			print("CheckVariable %s%s: %d", Context, VarName, value);
-		}
+		ScriptDebugLog(ID_VARIABLES, "CheckVariable %s%s: %d", Context, VarName, value);
 		return value;
 	}
 	if (stricmp(newVarName,"GLOBAL") ) {
@@ -2281,17 +2274,12 @@ ieDword CheckVariable(Scriptable* Sender, const char* VarName, const char* Conte
 			if (valid) {
 				*valid=false;
 			}
-			if (InDebug&ID_VARIABLES) {
-				Log(WARNING, "GameScript", "Invalid variable %s %s in checkvariable",
-					Context, VarName);
-			}
+			ScriptDebugLog(ID_VARIABLES, "Invalid variable %s %s in checkvariable", Context, VarName);
 		}
 	} else {
 		game->locals->Lookup( VarName, value );
 	}
-	if (InDebug&ID_VARIABLES) {
-		print("CheckVariable %s%s: %d", Context, VarName, value);
-	}
+	ScriptDebugLog(ID_VARIABLES, "CheckVariable %s%s: %d", Context, VarName, value);
 	return value;
 }
 
@@ -2301,7 +2289,7 @@ bool VariableExists(Scriptable *Sender, const char *VarName, const char *Context
 	ieDword value = 0;
 	char newVarName[8];
 	strlcpy(newVarName, Context, 7);
-	Game *game = core->GetGame();
+	const Game *game = core->GetGame();
 
 	if (Sender->GetCurrentArea()->locals->Lookup(VarName, value)) {
 		return true;
@@ -2389,7 +2377,7 @@ int DiffCore(ieDword a, ieDword b, int diffmode)
 	return 0;
 }
 
-int GetGroup(Actor *actor)
+int GetGroup(const Actor *actor)
 {
 	int type = 2; //neutral, has no enemies
 	if (actor->GetStat(IE_EA) <= EA_GOODCUTOFF) {
@@ -2401,7 +2389,7 @@ int GetGroup(Actor *actor)
 	return type;
 }
 
-Actor *GetNearestEnemyOf(Map *map, Actor *origin, int whoseeswho)
+Actor *GetNearestEnemyOf(const Map *map, const Actor *origin, int whoseeswho)
 {
 	//determining the allegiance of the origin
 	int type = GetGroup(origin);
@@ -2447,7 +2435,7 @@ Actor *GetNearestEnemyOf(Map *map, Actor *origin, int whoseeswho)
 	return ac;
 }
 
-Actor *GetNearestOf(Map *map, Actor *origin, int whoseeswho)
+Actor *GetNearestOf(const Map *map, const Actor *origin, int whoseeswho)
 {
 	Targets *tgts = new Targets();
 
@@ -2485,11 +2473,11 @@ Point GetEntryPoint(const char *areaname, const char *entryname)
 		return p;
 	}
 	const char *tmpstr = tab->QueryField(areaname, entryname);
-	int x=-1;
-	int y=-1;
-	sscanf(tmpstr, "%d.%d", &x, &y);
-	p.x=(short) x;
-	p.y=(short) y;
+	short x = -1;
+	short y = -1;
+	sscanf(tmpstr, "%hd.%hd", &x, &y);
+	p.x = x;
+	p.y = y;
 	return p;
 }
 
@@ -2716,19 +2704,23 @@ static bool InterruptSpellcasting(Scriptable* Sender) {
 // shared spellcasting action code for casting on scriptables
 void SpellCore(Scriptable *Sender, Action *parameters, int flags)
 {
-	ieResRef spellres;
+	ieResRef spellres = {};
 	int level = 0;
 	static bool third = core->HasFeature(GF_3ED_RULES);
-	Scriptable *pretarget = NULL;
 
 	// handle iwd2 marked spell casting (MARKED_SPELL is 0)
-	if (third && parameters->int0Parameter == 0) {
-		parameters->int0Parameter = Sender->LastMarkedSpell;
-		pretarget = Sender->GetCurrentArea()->GetActorByGlobalID(Sender->LastMarked);
+	// NOTE: supposedly only casting via SpellWait checks this, so refactor if needed
+	if (third && parameters->int0Parameter == 0 && !parameters->string0Parameter[0]) {
+		if (!Sender->LastMarkedSpell) {
+			// otherwise we spam a lot
+			Sender->ReleaseCurrentAction();
+			return;
+		}
+		ResolveSpellName(spellres, Sender->LastMarkedSpell);
 	}
 
 	//resolve spellname
-	if (!ResolveSpellName( spellres, parameters) ) {
+	if (!spellres[0] && !ResolveSpellName(spellres, parameters)) {
 		Sender->ReleaseCurrentAction();
 		return;
 	} else {
@@ -2765,9 +2757,8 @@ void SpellCore(Scriptable *Sender, Action *parameters, int flags)
 	}
 
 	Scriptable* tar = GetStoredActorFromObject( Sender, parameters->objects[1], seeflag );
-	if (pretarget) {
-		tar = pretarget;
-	} else if (!tar) {
+	if (!tar) {
+		parameters->int2Parameter = 0;
 		Sender->ReleaseCurrentAction();
 		if (act) {
 			act->SetStance(IE_ANI_READY);
@@ -2814,6 +2805,7 @@ void SpellCore(Scriptable *Sender, Action *parameters, int flags)
 	}
 	if (duration == -1) {
 		// some kind of error
+		parameters->int2Parameter = 0;
 		Sender->ReleaseCurrentAction();
 		return;
 	} else if (duration > 0) {
@@ -2822,11 +2814,13 @@ void SpellCore(Scriptable *Sender, Action *parameters, int flags)
 			parameters->int2Parameter = 0;
 		}
 		if (!(flags&SC_NOINTERRUPT) && InterruptSpellcasting(Sender)) {
+			parameters->int2Parameter = 0;
 			Sender->ReleaseCurrentAction();
 		}
 		return;
 	}
 	if (!(flags&SC_NOINTERRUPT) && InterruptSpellcasting(Sender)) {
+		parameters->int2Parameter = 0;
 		Sender->ReleaseCurrentAction();
 		return;
 	}
@@ -2840,6 +2834,7 @@ void SpellCore(Scriptable *Sender, Action *parameters, int flags)
 	} else {
 		Log(ERROR, "GameScript", "SpellCore: Action (%d) lost target somewhere!", parameters->actionID);
 	}
+	parameters->int2Parameter = 0;
 	Sender->ReleaseCurrentAction();
 }
 

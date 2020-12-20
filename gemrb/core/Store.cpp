@@ -88,12 +88,12 @@ Store::~Store(void)
 
 bool Store::IsItemAvailable(unsigned int slot) const
 {
-	Game * game = core->GetGame();
+	const Game *game = core->GetGame();
 	//0     - not infinite, not conditional
 	//-1    - infinite
 	//other - pst trigger ref
 
-	Condition *triggers = items[slot]->triggers;
+	const Condition *triggers = items[slot]->triggers;
 	if (triggers) {
 		Scriptable *shopper = game->GetSelectedPCSingle(false);
 		return triggers->Evaluate(shopper) != 0;

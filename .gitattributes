@@ -7,6 +7,9 @@
 *.wmp diff=ie
 *.gam diff=ie
 *.sav diff=ie
+*.are diff=ie
 
 testing export-ignore
 .github export-ignore
+
+apple/GemRB.xcodeproj/* binary

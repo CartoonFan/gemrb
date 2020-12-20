@@ -212,10 +212,8 @@ private:
 	std::vector<CREItem*> Slots;
 	Actor* Owner;
 	int InventoryType;
-	/// Flag indicating whether weight needs to be recalculated
-	mutable int Changed;
 	/** Total weight of all items in Inventory */
-	mutable int Weight;
+	int Weight;
 
 	ieWordSigned Equipped;
 	ieWord EquippedHeader;
@@ -243,7 +241,6 @@ public:
 	 * flags: see ieCREItemFlagBits */
 	bool HasItem(const char *resref, ieDword flags) const;
 
-	void CalculateWeight(void) const;
 	void SetInventoryType(int arg);
 	void SetOwner(Actor* act) { Owner = act; }
 
@@ -308,7 +305,7 @@ public:
 	bool ChangeItemFlag(ieDword slot, ieDword value, int mode);
 	/** Equips the item, don't use it directly for weapons */
 	bool EquipItem(ieDword slot);
-	bool UnEquipItem(ieDword slot, bool removecurse);
+	bool UnEquipItem(ieDword slot, bool removecurse) const;
 	/** Returns equipped weapon, also its slot */
 	CREItem *GetUsedWeapon(bool leftorright, int &slot) const;
 	/** returns slot of launcher weapon currently equipped */
@@ -318,7 +315,7 @@ public:
 	/** returns slot of launcher weapon for projectile in specified slot */
 	int FindSlotRangedWeapon(ieDword slot) const;
 	/** Returns a slot which might be empty, or capable of holding item (or part of it) */
-	int FindCandidateSlot(int slottype, size_t first_slot, const char *resref = NULL);
+	int FindCandidateSlot(int slottype, size_t first_slot, const char *resref = NULL) const;
 	/** Creates an item in the slot*/
 	void SetSlotItemRes(const ieResRef ItemResRef, int Slot, int Charge0=1, int Charge1=0, int Charge2=0);
 	/** Adds item to slot*/
@@ -375,6 +372,7 @@ public:
 	static int GetQuickSlot();
 	static int GetInventorySlot();
 private:
+	void CalculateWeight(void);
 	int FindRangedProjectile(unsigned int type) const;
 	// called by KillSlot
 	void RemoveSlotEffects( /*CREItem* slot*/ ieDword slot );

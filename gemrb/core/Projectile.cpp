@@ -295,6 +295,7 @@ void Projectile::CreateIteration()
 	pro->SetCaster(Caster, Level);
 	if (ExtFlags&PEF_CURVE) {
 		pro->bend=bend+1;
+		pro->Speed = Speed; // fix the different speed of MAGICMIS.pro compared to SPMAGMIS.pro
 	}
 
 	if (FakeTarget) {
@@ -507,7 +508,7 @@ void Projectile::SetDelay(int delay)
 #define WEAPON_FIST        0
 #define WEAPON_BYPASS      0x10000
 
-bool Projectile::FailedIDS(Actor *target) const
+bool Projectile::FailedIDS(const Actor *target) const
 {
 	bool fail = !EffectQueue::match_ids( target, IDSType, IDSValue);
 	if (ExtFlags&PEF_NOTIDS) {
@@ -779,7 +780,7 @@ void Projectile::EndTravel()
 }
 
 //Note: trails couldn't be higher than VVC, but this shouldn't be a problem
-int Projectile::AddTrail(ieResRef BAM, const ieByte *pal)
+int Projectile::AddTrail(const ieResRef BAM, const ieByte *pal) const
 {
 /*
 	VEFObject *vef=gamedata->GetVEFObject(BAM,0);
@@ -876,21 +877,25 @@ void Projectile::DoStep(unsigned int walk_speed)
 	if (!step) {
 		step = path;
 	}
+
+	const PathNode *start = step;
 	while (step->Next && (( time - timeStartStep ) >= walk_speed)) {
-		step = step->Next;
-		if (!walk_speed) {
-			timeStartStep = time;
-			break;
+		unsigned int count = Speed;
+		while (step->Next && count) {
+			step = step->Next;
+			--count;
 		}
 		timeStartStep = timeStartStep + walk_speed;
+
+		if (!walk_speed) {
+			break;
+		}
 	}
 
-	if (ExtFlags&PEF_CONTINUE) {
-		// FIXME: should this depth be > 1?
-		// Also, should we look behind as well?
+	if (ExtFlags & PEF_CONTINUE) {
+		// check for every step along the way
 		// the test case is lightning bolt, its a long projectile,
-		// so its possible we should search starting from step->Parent with depth 2
-		LineTarget(step, 1);
+		LineTarget(start, step->Next);
 	}
 
 	SetOrientation (step->orient, false);
@@ -944,10 +949,6 @@ void Projectile::NextTarget(const Point &p)
 {
 	ClearPath();
 	Destination = p;
-	//call this with destination
-	if (path) {
-		return;
-	}
 	if (!Speed) {
 		Pos = Destination;
 		return;
@@ -964,7 +965,8 @@ void Projectile::NextTarget(const Point &p)
 	}
 
 	int flags = (ExtFlags&PEF_BOUNCE) ? GL_REBOUND : GL_PASS;
-	path = area->GetLine( Pos, Destination, Speed, Orientation, flags);
+	int stepping = (ExtFlags & PEF_BOUNCE) ? 1 : Speed;
+	path = area->GetLine(Pos, Destination, stepping, Orientation, flags);
 }
 
 void Projectile::SetTarget(const Point &p)
@@ -1036,10 +1038,11 @@ void Projectile::ClearPath()
 	step = NULL;
 }
 
-int Projectile::CalculateTargetFlag()
+int Projectile::CalculateTargetFlag() const
 {
 	//if there are any, then change phase to exploding
 	int flags = GA_NO_DEAD|GA_NO_UNSCHEDULED;
+	bool checkingEA = false;
 
 	if (Extension) {
 		if (Extension->AFlags&PAF_NO_WALL) {
@@ -1065,6 +1068,9 @@ int Projectile::CalculateTargetFlag()
 		default:
 			return flags;
 		}
+		if (Extension->AFlags & PAF_TARGET) {
+			checkingEA = true;
+		}
 
 		//this is the only way to affect neutrals and enemies
 		if (Extension->APFlags&APF_INVERT_TARGET) {
@@ -1072,8 +1078,12 @@ int Projectile::CalculateTargetFlag()
 		}
 	}
 
-	Actor *caster = area->GetActorByGlobalID(Caster);
-	if (caster && ((Actor *) caster)->GetStat(IE_EA)<EA_GOODCUTOFF) {
+	Scriptable *caster = area->GetScriptableByGlobalID(Caster);
+	if (caster && (!checkingEA || (caster->Type == ST_ACTOR && ((Actor *) caster)->GetStat(IE_EA) < EA_GOODCUTOFF))) {
+		return flags;
+	}
+	// iwd2 ar6050 has doors casting chain lightning :)
+	if (caster && caster->Type != ST_ACTOR && checkingEA) {
 		return flags;
 	}
 
@@ -1107,9 +1117,9 @@ void Projectile::CheckTrigger(unsigned int radius)
 	}
 }
 
-void Projectile::SetEffectsCopy(EffectQueue *eq, Point &source)
+void Projectile::SetEffectsCopy(const EffectQueue *eq, const Point &source)
 {
-	if(effects) delete effects;
+	delete effects;
 	if(!eq) {
 		effects=NULL;
 		return;
@@ -1118,30 +1128,57 @@ void Projectile::SetEffectsCopy(EffectQueue *eq, Point &source)
 	effects->ModifyAllEffectSources(source);
 }
 
-void Projectile::LineTarget()
+void Projectile::LineTarget() const
 {
-	LineTarget(path, -1);
+	LineTarget(path, nullptr);
 }
 
-void Projectile::LineTarget(PathNode* beg, unsigned int depth)
+void Projectile::LineTarget(const PathNode *beg, const PathNode *end) const
 {
-	if(!effects) {
+	if (!effects) {
 		return;
 	}
 
 	Actor *original = area->GetActorByGlobalID(Caster);
-	Actor *prev = NULL;
-	PathNode *iter = beg;
-	while(iter && depth > 0) {
-		Point pos(iter->x,iter->y);
-		Actor *target = area->GetActorInRadius(pos, CalculateTargetFlag(), 1);
-		if (target && target->GetGlobalID()!=Caster && prev!=target) {
-			prev = target;
-	 		int res = effects->CheckImmunity ( target );
-			if (res>0) {
+	int targetFlags = CalculateTargetFlag();
+	const PathNode *iter = beg;
+
+	do {
+		const PathNode *first = iter;
+		const PathNode *last = iter;
+		unsigned int orient = first->orient;
+		while (iter && iter != end && iter->orient == orient) {
+			last = iter;
+			iter = iter->Next;
+		}
+
+		const Point s(short(first->x), short(first->y));
+		const Point d(short(last->x), short(last->y));
+		const std::vector<Actor *> &actors = area->GetAllActors();
+
+		for (Actor *target : actors) {
+			if (target->GetGlobalID() == Caster) {
+				continue;
+			}
+			if (!target->ValidTarget(targetFlags)) {
+				continue;
+			}
+			double t = 0.0;
+			if (PersonalLineDistance(s, d, target, &t) > 1) {
+				continue;
+			}
+			if (t < 0.0 && first->Parent != nullptr && first->Parent->orient == orient) {
+				// skip; assume we've hit the target before
+				continue;
+			} else if (t > 1.0 && last->Next != nullptr && last->Next->orient == orient) {
+				// skip; assume we'll hit it after
+				continue;
+			}
+
+			if (effects->CheckImmunity(target) > 0) {
 				EffectQueue *eff = effects->CopySelf();
 				eff->SetOwner(original);
-				if(ExtFlags&PEF_RGB) {
+				if (ExtFlags & PEF_RGB) {
 					target->SetColorMod(0xff, RGBModifier::ADD, ColorSpeed,
 						RGB >> 8, RGB >> 16, RGB >> 24);
 				}
@@ -1150,9 +1187,7 @@ void Projectile::LineTarget(PathNode* beg, unsigned int depth)
 				delete eff;
 			}
 		}
-		iter = iter->Next;
-		--depth;
-	}
+	} while (iter && iter != end);
 }
 
 //secondary projectiles target all in the explosion radius
@@ -1164,14 +1199,13 @@ void Projectile::SecondaryTarget()
 	int mindeg = 0;
 	int maxdeg = 0;
 	int degOffset = 0;
-	char saneOrientation = Orientation;
 
 	//the AOE (area of effect) is cone shaped
 	if (Extension->AFlags&PAF_CONE) {
 		// see CharAnimations.cpp for a nice visualization of the orientation directions
 		// they start at 270° and go anticlockwise, so we have to rotate (reflect over y=-x) to match what math functions expect
 		// TODO: check if we can ignore this and use the angle between caster pos and target pos (are they still available here?)
-		saneOrientation = 12 - Orientation;
+		char saneOrientation = 12 - Orientation;
 		if (saneOrientation < 0) saneOrientation = MAX_ORIENT + saneOrientation;
 
 		// for cone angles (widths) bigger than 22.5 we will always have a range of values greater than 360
@@ -1197,27 +1231,26 @@ void Projectile::SecondaryTarget()
 
 	int radius = Extension->ExplosionRadius / 16;
 	std::vector<Actor *> actors = area->GetAllActorsInRadius(Pos, CalculateTargetFlag(), radius);
-	std::vector<Actor *>::iterator poi;
-	for (poi = actors.begin(); poi != actors.end(); ++poi) {
-		ieDword Target = (*poi)->GetGlobalID();
+	for (const Actor *actor : actors) {
+		ieDword targetID = actor->GetGlobalID();
 
 		//this flag is actually about ignoring the caster (who is at the center)
-		if ((SFlags & PSF_IGNORE_CENTER) && (Caster==Target)) {
+		if ((SFlags & PSF_IGNORE_CENTER) && Caster == targetID) {
 			continue;
 		}
 
 		//IDS targeting for area projectiles
-		if (FailedIDS(*poi)) {
+		if (FailedIDS(actor)) {
 			continue;
 		}
 
 		if (Extension->AFlags&PAF_CONE) {
 			//cone never affects the caster
-			if(Caster==Target) {
+			if (Caster == targetID) {
 				continue;
 			}
-			double xdiff = (*poi)->Pos.x-Pos.x;
-			double ydiff = Pos.y-(*poi)->Pos.y;
+			double xdiff = actor->Pos.x - Pos.x;
+			double ydiff = Pos.y - actor->Pos.y;
 			int deg;
 
 			// a dragon will definitely be easier to hit than a mouse
@@ -1251,7 +1284,7 @@ void Projectile::SecondaryTarget()
 		pro->SetTarget(Pos);
 		//TODO:actually some of the splash projectiles are a good example of faketarget
 		//projectiles (that don't follow the target, but still hit)
-		area->AddProjectile(pro, Pos, Target, false);
+		area->AddProjectile(pro, Pos, targetID, false);
 		fail=false;
 
 		//we already got one target affected in the AOE, this flag says
@@ -1262,8 +1295,8 @@ void Projectile::SecondaryTarget()
 			}
 			//if target counting is per HD and this target is an actor, use the xp level field
 			//otherwise count it as one
-			if ((Extension->APFlags&APF_COUNT_HD) && ((*poi)->Type==ST_ACTOR) ) {
-				extension_targetcount-= (*poi)->GetXPLevel(true);
+			if (Extension->APFlags & APF_COUNT_HD) {
+				extension_targetcount -= actor->GetXPLevel(true);
 			} else {
 				extension_targetcount--;
 			}
@@ -1293,7 +1326,7 @@ int Projectile::Update()
 		return 1;
 	}
 
-	Game *game = core->GetGame();
+	const Game *game = core->GetGame();
 	if (game && game->IsTimestopActive() && !(TFlags&PTF_TIMELESS)) {
 		return 1;
 	}
@@ -1507,6 +1540,18 @@ void Projectile::DrawExplosion(const Region &screen)
 				vvc->SetBlend();
 				//quick hack to use the single object envelope
 				area->AddVVCell(new VEFObject(vvc));
+			}
+			// bg2 comet has the explosion split into two vvcs, with just a starting cycle difference
+			// until we actually need two vvc fields in the extension, let's just hack around it
+			if (!stricmp(Extension->VVCRes, "SPCOMEX1")) {
+				ScriptedAnimation* vvc = gamedata->GetScriptedAnimation("SPCOMEX2", false);
+				if (vvc) {
+					vvc->XPos += Pos.x;
+					vvc->YPos += Pos.y;
+					vvc->PlayOnce();
+					vvc->SetBlend();
+					area->AddVVCell(new VEFObject(vvc));
+				}
 			}
 		}
 		
@@ -1895,6 +1940,11 @@ void Projectile::StaticTint(const Color &newtint)
 {
 	tint = newtint;
 	TFlags &= ~PTF_TINT; //turn off area tint
+}
+
+int Projectile::GetPhase() const
+{
+	return phase;
 }
 
 void Projectile::Cleanup()

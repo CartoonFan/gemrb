@@ -361,7 +361,8 @@ private:
 	Calendar * calendar;
 	WorldMapArray* worldmap;
 	ieDword GameFeatures[(GF_COUNT+31)/32];
-	ResRef CursorBam;
+	ResRef MainCursorsImage;
+	ResRef TextCursorBam;
 	ResRef ScrollCursorBam;
 	ieResRef GroundCircleBam[MAX_CIRCLE_SIZE];
 	int GroundCircleScale[MAX_CIRCLE_SIZE];
@@ -809,6 +810,8 @@ public:
 	char CustomFontPath[_MAX_PATH];
 	char GameName[_MAX_PATH];
 	char GameType[10];
+	int GamepadPointerSpeed = 10;
+	bool VitaKeepAspectRatio = true;
 	char GemRBPath[_MAX_PATH];
 	char PluginsPath[_MAX_PATH];
 	char CachePath[_MAX_PATH];
@@ -822,7 +825,7 @@ public:
 	unsigned int TooltipDelay;
 	int IgnoreOriginalINI;
 	unsigned int FogOfWar;
-	bool CaseSensitive, SkipIntroVideos, DrawFPS;
+	bool CaseSensitive = true, SkipIntroVideos = false, DrawFPS = false, Logging = true;
 	bool TouchScrollAreas, UseSoftKeyboard;
 	unsigned short NumFingScroll, NumFingKboard, NumFingInfo;
 	int MouseFeedback;

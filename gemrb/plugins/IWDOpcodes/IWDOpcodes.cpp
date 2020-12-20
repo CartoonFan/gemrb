@@ -267,7 +267,7 @@ static EffectDesc effectnames[] = {
 	{ "Recitation", fx_recitation, 0, -1 }, //f9
 	{ "RecitationBad", fx_recitation_bad, 0, -1 },//fa
 	{ "LichTouch", fx_lich_touch, EFFECT_NO_LEVEL_CHECK, -1 },//fb
-	{ "BlindingOrb", fx_blinding_orb, 0, -1 }, //fc
+	{ "BlindingOrb", fx_blinding_orb, EFFECT_DICED, -1 }, //fc
 	{ "RemoveEffects", fx_remove_effects, 0, -1 }, //fe
 	{ "SalamanderAura", fx_salamander_aura, 0, -1 }, //ff
 	{ "UmberHulkGaze", fx_umberhulk_gaze, 0, -1 }, //100
@@ -494,15 +494,15 @@ static void ReadSpellProtTable(const ieResRef tablename)
 #define STI_WATERY            0x110
 #define STI_INVALID           0xffff
 
-//returns true if iwd ids targeting resists the spell
-//FIXME: the constant return values do not match the rest
-static int check_iwd_targeting(Scriptable* Owner, Actor* target, ieDword value, ieDword type)
+//returns true if the target matches iwd ids targeting
+//usually, this is used to restrict an effect to specific targets
+static bool check_iwd_targeting(Scriptable* Owner, Actor* target, ieDword value, ieDword type, Effect *fx = nullptr)
 {
 	if (spellrescnt==-1) {
 		ReadSpellProtTable("splprot");
 	}
 	if (type>=(ieDword) spellrescnt) {
-		return 0; //not resisted
+		return false; //not matched
 	}
 
 	ieDword idx = spellres[type].stat;
@@ -512,10 +512,9 @@ static int check_iwd_targeting(Scriptable* Owner, Actor* target, ieDword value, 
 	if (val==0xffffffff) {
 		val = value;
 	}
-	ieDword animID; int ret;
 	switch (idx) {
 	case STI_INVALID:
-		return 0;
+		return false;
 	case STI_EA:
 		return DiffCore(EARelation(Owner, target), val, rel);
 	case STI_DAYTIME:
@@ -534,24 +533,16 @@ static int check_iwd_targeting(Scriptable* Owner, Actor* target, ieDword value, 
 		}
 	case STI_TWO_ROWS:
 		//used in checks where any of two matches are ok (golem or undead etc)
-		if (check_iwd_targeting(Owner, target, value, rel)) return 1;
-		if (check_iwd_targeting(Owner, target, value, val)) return 1;
-		return 0;
+		return check_iwd_targeting(Owner, target, value, rel, fx) ||
+			check_iwd_targeting(Owner, target, value, val, fx);
 	case STI_NOT_TWO_ROWS:
 		//this should be the opposite as above
-		if (check_iwd_targeting(Owner, target, value, rel)) return 0;
-		if (check_iwd_targeting(Owner, target, value, val)) return 0;
-		return 1;
+		return !(check_iwd_targeting(Owner, target, value, rel, fx) ||
+			check_iwd_targeting(Owner, target, value, val, fx));
 	case STI_SOURCE_TARGET:
-		if (Owner==target) {
-			return 0;
-		}
-		return 1;
+		return Owner == target;
 	case STI_SOURCE_NOT_TARGET:
-		if (Owner!=target) {
-			return 0;
-		}
-		return 1;
+		return Owner != target;
 	case STI_CIRCLESIZE:
 		return DiffCore((ieDword) target->GetAnims()->GetCircleSize(), val, rel);
 	case STI_EVASION:
@@ -559,36 +550,44 @@ static int check_iwd_targeting(Scriptable* Owner, Actor* target, ieDword value, 
 			// NOTE: no idea if this is used in iwd2 too (00misc32 has it set)
 			// FIXME: check for evasion itself
 			if (target->GetThiefLevel() < 2 && target->GetMonkLevel() < 1) {
-				return 0;
+				return false;
 			}
-			// FIXME: if it is used, make sure to pass correct values here (pulled from the effect)
-			val = target->GetSavingThrow(4, 0); // reflex
+			val = target->GetSavingThrow(4, 0, fx); // reflex
 		} else {
 			if (target->GetThiefLevel() < 7 ) {
-				return 0;
+				return false;
 			}
 			val = target->GetSavingThrow(1,0); //breath
 		}
 
-		if (val) {
-			return 1;
-		}
-		return 0;
+		return val;
 	case STI_WATERY:
-		// hardcoded via animation id, so we can't use STI_TWO_ROWS
-		// sahuagin x2, water elementals x2 (and water weirds)
-		animID = target->GetSafeStat(IE_ANIMATION_ID);
-		ret = !val;
-		if (animID == 0xf40b || animID == 0xf41b || animID == 0xe238 || animID == 0xe298 || animID == 0xe252) {
-			ret = val;
+		{
+			// hardcoded via animation id, so we can't use STI_TWO_ROWS
+			// sahuagin x2, water elementals x2 (and water weirds)
+			ieDword animID = target->GetSafeStat(IE_ANIMATION_ID);
+			int ret = !val;
+			if (animID == 0xf40b || animID == 0xf41b || animID == 0xe238 || animID == 0xe298 || animID == 0xe252) {
+				ret = val;
+			}
+			return ret;
 		}
-		return ret;
 	default:
 		{
-			//subraces are not stand alone stats, actually, this hack should affect the CheckStat action too
 			ieDword stat = STAT_GET(idx);
-			if (idx==IE_SUBRACE) {
-				stat |= STAT_GET(IE_RACE)<<16;
+			if (idx == IE_SUBRACE) {
+				//subraces are not stand alone stats, actually, this hack should affect the CheckStat action too
+				stat |= STAT_GET(IE_RACE) << 16;
+			} else if (idx == IE_ALIGNMENT) {
+				//alignment checks can be for good vs. evil, or chaotic vs. lawful, or both
+				ieDword almask = 0;
+				if (val & AL_GE_MASK) {
+					almask |= AL_GE_MASK;
+				}
+				if (val & AL_LC_MASK) {
+					almask |= AL_LC_MASK;
+				}
+				stat &= almask;
 			}
 			return DiffCore(stat, val, rel);
 		}
@@ -770,7 +769,14 @@ int fx_iwd_visual_spell_hit (Scriptable* Owner, Actor* target, Effect* fx)
 		return FX_NOT_APPLIED;
 	}
 	Point pos(fx->PosX,fx->PosY);
-	Projectile *pro = core->GetProjectileServer()->GetProjectileByIndex(0x1001+fx->Parameter2);
+	Projectile *pro;
+	if (fx->Parameter4) {
+		// SpellHitEffectPoint is used with sheffect.ids, so the indices are smaller
+		// we don't just check for both, since there's some overlap
+		pro = core->GetProjectileServer()->GetProjectileByIndex(fx->Parameter2);
+	} else {
+		pro = core->GetProjectileServer()->GetProjectileByIndex(0x1001+fx->Parameter2);
+	}
 	pro->SetCaster(fx->CasterID, fx->CasterLevel);
 	if (target) {
 		//i believe the spell hit projectiles don't follow anyone
@@ -892,7 +898,7 @@ int fx_slow_poison (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 
 //this requires the FXOpcode package
 ieResRef iwd_monster_2da[IWD_MSC]={"MSUMMO1","MSUMMO2","MSUMMO3","MSUMMO4",
- "MSUMMO5","MSUMMO6","MSUMMO7","ASUMMO1","ASUMMO2","ASUMMO3","CDOOM","GINSECT",
+ "MSUMMO5","MSUMMO6","MSUMMO7","ASUMMO1","ASUMMO2","ASUMMO3","GINSECT","CDOOM",
  "MSUMMOM"};
 
 //0xf0 IWDMonsterSummoning
@@ -942,8 +948,8 @@ int fx_vampiric_touch (Scriptable* Owner, Actor* target, Effect* fx)
 		default:
 			return FX_NOT_APPLIED;
 	}
-	int damage = donor->Damage(fx->Parameter1, fx->Parameter2, owner, fx->IsVariable, fx->SavingThrowType);
-	receiver->SetBase( IE_HITPOINTS, BASE_GET( IE_HITPOINTS ) + ( damage ) );
+	int damage = donor->Damage(fx->Parameter1, DAMAGE_MAGIC, owner, fx->IsVariable, fx->SavingThrowType);
+	receiver->SetBase(IE_HITPOINTS, receiver->GetBase(IE_HITPOINTS) + damage);
 	return FX_NOT_APPLIED;
 }
 
@@ -1075,7 +1081,7 @@ int fx_burning_blood2 (Scriptable* Owner, Actor* target, Effect* fx)
 	}
 
 	//timing
-	if (core->GetGame()->GameTime%6) {
+	if (core->GetGame()->GameTime % core->Time.round_sec) {
 		return FX_APPLIED;
 	}
 
@@ -1190,7 +1196,7 @@ int fx_blinding_orb (Scriptable* Owner, Actor* target, Effect* fx)
 	//check saving throw
 	bool st;
 	if (core->HasFeature(GF_ENHANCED_EFFECTS)) {
-		st = target->GetSavingThrow(2, 0, fx->SpellLevel, fx->SavingThrowBonus); // fortitude
+		st = target->GetSavingThrow(2, 0, fx); // fortitude
 	} else {
 		st = target->GetSavingThrow(0,0); //spell
 	}
@@ -1327,16 +1333,16 @@ int fx_umberhulk_gaze (Scriptable* Owner, Actor* target, Effect* fx)
 		if (PersonalDistance(target, victim)>300) continue;
 
 		//check if target is golem/umber hulk/minotaur, the effect is not working
-		if (check_iwd_targeting(Owner, victim, 0, 17)) { //umber hulk
+		if (check_iwd_targeting(Owner, victim, 0, 17, fx)) { //umber hulk
 			continue;
 		}
-		if (check_iwd_targeting(Owner, victim, 0, 27)) { //golem
+		if (check_iwd_targeting(Owner, victim, 0, 27, fx)) { //golem
 			continue;
 		}
-		if (check_iwd_targeting(Owner, victim, 0, 29)) { //minotaur
+		if (check_iwd_targeting(Owner, victim, 0, 29, fx)) { //minotaur
 			continue;
 		}
-		if (check_iwd_targeting(Owner, victim, 0, 23)) { //blind
+		if (check_iwd_targeting(Owner, victim, 0, 23, fx)) { //blind
 			continue;
 		}
 
@@ -1366,7 +1372,8 @@ int fx_zombielord_aura (Scriptable* Owner, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_MIND) {
 		target->fxqueue.RemoveAllEffects(fx_eye_mind_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_MIND]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_MIND, false);
+		return FX_ABORT;
 	}
 
 	fx->TimingMode=FX_DURATION_AFTER_EXPIRES;
@@ -1393,10 +1400,10 @@ int fx_zombielord_aura (Scriptable* Owner, Actor* target, Effect* fx)
 		if (PersonalDistance(target, victim)>20) continue;
 
 		//check if target is golem/umber hulk/minotaur, the effect is not working
-		if (check_iwd_targeting(Owner, victim, 0, 27)) { //golem
+		if (check_iwd_targeting(Owner, victim, 0, 27, fx)) { //golem
 			continue;
 		}
-		if (check_iwd_targeting(Owner, victim, 0, 1)) { //undead
+		if (check_iwd_targeting(Owner, victim, 0, 1, fx)) { //undead
 			continue;
 		}
 
@@ -1487,7 +1494,7 @@ int fx_summon_pomab (Scriptable* Owner, Actor* target, Effect* fx)
 	}
 
 	int real = core->Roll(1,cnt,-1);
-	const char *resrefs[2]={tab->QueryField((unsigned int) 0,0), tab->QueryField((int) 0,1) };
+	const char *resrefs[2] = { tab->QueryField(0U, 0), tab->QueryField(0, 1) };
 
 	for (int i=0;i<cnt;i++) {
 		Point p(strtol(tab->QueryField(i+1,0),NULL,0), strtol(tab->QueryField(i+1,1), NULL, 0));
@@ -1520,7 +1527,8 @@ int fx_control_undead (Scriptable* Owner, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_MIND) {
 		target->fxqueue.RemoveAllEffects(fx_eye_mind_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_MIND]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_MIND, false);
+		return FX_ABORT;
 	}
 
 	bool enemyally = true;
@@ -1621,7 +1629,8 @@ int fx_cloak_of_fear(Scriptable* Owner, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_MIND) {
 		target->fxqueue.RemoveAllEffects(fx_eye_mind_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_MIND]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_MIND, false);
+		return FX_ABORT;
 	}
 
 	//timing (set up next fire)
@@ -1663,7 +1672,7 @@ int fx_eye_of_the_mind (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_eye_of_the_mind(%2d)", fx->Opcode);
 	if (target->SetSpellState( SS_EYEMIND)) return FX_APPLIED;
-	EXTSTATE_SET(EXTSTATE_EYE_MIND);
+	target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_MIND, true);
 
 	if (fx->FirstApply) {
 		target->LearnSpell(SevenEyes[EYE_MIND], LS_MEMO);
@@ -1675,7 +1684,7 @@ int fx_eye_of_the_sword (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_eye_of_the_sword(%2d)", fx->Opcode);
 	if (target->SetSpellState( SS_EYESWORD)) return FX_APPLIED;
-	EXTSTATE_SET(EXTSTATE_EYE_SWORD);
+	target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_SWORD, true);
 
 	if (fx->FirstApply) {
 		target->LearnSpell(SevenEyes[EYE_SWORD], LS_MEMO);
@@ -1688,7 +1697,7 @@ int fx_eye_of_the_mage (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_eye_of_the_mage(%2d)", fx->Opcode);
 	if (target->SetSpellState( SS_EYEMAGE)) return FX_APPLIED;
-	EXTSTATE_SET(EXTSTATE_EYE_MAGE);
+	target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_MAGE, true);
 
 	if (fx->FirstApply) {
 		target->LearnSpell(SevenEyes[EYE_MAGE], LS_MEMO);
@@ -1701,7 +1710,7 @@ int fx_eye_of_venom (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_eye_of_venom(%2d)", fx->Opcode);
 	if (target->SetSpellState( SS_EYEVENOM)) return FX_APPLIED;
-	EXTSTATE_SET(EXTSTATE_EYE_VENOM);
+	target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_VENOM, true);
 
 	if (fx->FirstApply) {
 		target->LearnSpell(SevenEyes[EYE_VENOM], LS_MEMO);
@@ -1714,7 +1723,7 @@ int fx_eye_of_the_spirit (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_eye_of_the_spirit(%2d)", fx->Opcode);
 	if (target->SetSpellState( SS_EYESPIRIT)) return FX_APPLIED;
-	EXTSTATE_SET(EXTSTATE_EYE_SPIRIT);
+	target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_SPIRIT, true);
 
 	if (fx->FirstApply) {
 		target->LearnSpell(SevenEyes[EYE_SPIRIT], LS_MEMO);
@@ -1727,7 +1736,7 @@ int fx_eye_of_fortitude (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_eye_of_fortitude(%2d)", fx->Opcode);
 	if (target->SetSpellState( SS_EYEFORTITUDE)) return FX_APPLIED;
-	EXTSTATE_SET(EXTSTATE_EYE_FORT);
+	target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_FORT, true);
 
 	if (fx->FirstApply) {
 		target->LearnSpell(SevenEyes[EYE_FORT], LS_MEMO);
@@ -1740,7 +1749,7 @@ int fx_eye_of_stone (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_eye_of_stone(%2d)", fx->Opcode);
 	if (target->SetSpellState( SS_EYESTONE)) return FX_APPLIED;
-	EXTSTATE_SET(EXTSTATE_EYE_STONE);
+	target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_STONE, true);
 
 	if (fx->FirstApply) {
 		target->LearnSpell(SevenEyes[EYE_STONE], LS_MEMO);
@@ -1760,6 +1769,7 @@ int fx_remove_seven_eyes (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	target->spellbook.RemoveSpell(SevenEyes[EYE_SPIRIT]);
 	target->spellbook.RemoveSpell(SevenEyes[EYE_FORT]);
 	target->spellbook.RemoveSpell(SevenEyes[EYE_STONE]);
+	target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_SEVEN_EYES, false);
 	return FX_NOT_APPLIED;
 }
 
@@ -1786,7 +1796,8 @@ int fx_soul_eater (Scriptable* Owner, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_SPIRIT) {
 		target->fxqueue.RemoveAllEffects(fx_eye_spirit_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_SPIRIT]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_SPIRIT, false);
+		return FX_ABORT;
 	}
 
 	// Soul Eater has no effect on undead, constructs, and elemental creatures,
@@ -2194,19 +2205,14 @@ int fx_cutscene (Scriptable* /*Owner*/, Actor* /*target*/, Effect* fx)
 int fx_resist_spell (Scriptable* Owner, Actor* target, Effect *fx)
 {
 	//check iwd ids targeting
-	// was the opposite for a while (cure light wounds resisted by undead), but that spell uses 0x122 anyway
-	// eg. bard songs check for non-allies and deaf actors to exclude them
-	if (check_iwd_targeting(Owner, target, fx->Parameter1, fx->Parameter2) ) {
-		return FX_ABORT;
+	if (!check_iwd_targeting(Owner, target, fx->Parameter1, fx->Parameter2, fx)) {
+		return FX_NOT_APPLIED;
 	}
 
-	// don't abort if we passed the check and we're in the same spell
-	if (!strnicmp(fx->Resource, fx->Source, sizeof(fx->Resource))) {
+	if (strnicmp(fx->Resource, fx->Source, sizeof(fx->Resource))) {
 		return FX_APPLIED;
 	}
 	//this has effect only on first apply, it will stop applying the spell
-	// FIXME: should probably return FX_NOT_APPLIED instead
-	Log(DEBUG, "IWDOpcodes", "fx_resist_spell: blatantly resisted spell %s!", fx->Source);
 	return FX_ABORT;
 }
 
@@ -2216,7 +2222,7 @@ int fx_resist_spell_and_message (Scriptable* Owner, Actor* target, Effect *fx)
 {
 	//check iwd ids targeting
 	//changed this to the opposite (cure light wounds resisted by undead)
-	if (!check_iwd_targeting(Owner, target, fx->Parameter1, fx->Parameter2) ) {
+	if (!check_iwd_targeting(Owner, target, fx->Parameter1, fx->Parameter2, fx)) {
 		return FX_NOT_APPLIED;
 	}
 
@@ -2260,14 +2266,14 @@ int fx_rod_of_smithing (Scriptable* Owner, Actor* target, Effect* fx)
 	int damage = 0;
 	int five_percent = core->Roll(1,100,0)<5;
 
-	if (check_iwd_targeting(Owner, target, 0, 27)) { //golem
+	if (check_iwd_targeting(Owner, target, 0, 27, fx)) { //golem
 			if(five_percent) {
 				//instant death
 				damage = -1;
 			} else {
 				damage = core->Roll(1,8,3);
 			}
-	} else if (check_iwd_targeting(Owner, target, 0, 92)) { //outsider
+	} else if (check_iwd_targeting(Owner, target, 0, 92, fx)) { //outsider
 			if (five_percent) {
 				damage = core->Roll(8,3,0);
 			}
@@ -2551,7 +2557,7 @@ int fx_protection_from_evil (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 int fx_add_effects_list (Scriptable* Owner, Actor* target, Effect* fx)
 {
 	//after iwd2 style ids targeting, apply the spell named in the resource field
-	if (!check_iwd_targeting(Owner, target, fx->Parameter1, fx->Parameter2) ) {
+	if (!check_iwd_targeting(Owner, target, fx->Parameter1, fx->Parameter2, fx)) {
 		return FX_NOT_APPLIED;
 	}
 	core->ApplySpell(fx->Resource, target, Owner, fx->Power);
@@ -2727,7 +2733,7 @@ int fx_control (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 
 	if (fx->Parameter3 && fx->Parameter4<game->GameTime) {
 		fx->Parameter3 = 0;
-		if (target->GetSavingThrow(IE_SAVEWILL, 0, fx->SpellLevel, fx->SavingThrowBonus)) {
+		if (target->GetSavingThrow(IE_SAVEWILL, 0, fx)) {
 			return FX_NOT_APPLIED;
 		}
 	}
@@ -3232,7 +3238,7 @@ int fx_energy_drain (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	//if there is another energy drain effect (level drain), add them up
 	STAT_ADD(IE_LEVELDRAIN, fx->Parameter1);
 	// bonus to all saves
-	HandleSaveBoni(target, -fx->Parameter1, fx->TimingMode);
+	HandleSaveBoni(target, - signed(fx->Parameter1), fx->TimingMode);
 	STAT_SUB(IE_MAXHITPOINTS, fx->Parameter1*5);
 	return FX_APPLIED;
 }
@@ -3332,11 +3338,11 @@ int fx_day_blindness (Scriptable* Owner, Actor* target, Effect* fx)
 
 	// medium hack (better than original)
 	// the original used explicit race/subrace values
-	ieDword penalty;
+	int penalty;
 
 	//the original engine let the effect stay on non affected races, doing the same so the spell state sticks
-	if (check_iwd_targeting(Owner, target, 0, 82)) penalty = 1; //dark elf
-	else if (check_iwd_targeting(Owner, target, 0, 84)) penalty = 2; //duergar
+	if (check_iwd_targeting(Owner, target, 0, 82, fx)) penalty = 1; //dark elf
+	else if (check_iwd_targeting(Owner, target, 0, 84, fx)) penalty = 2; //duergar
 	else return FX_APPLIED;
 
 	target->AddPortraitIcon(PI_DAYBLINDNESS);
@@ -3344,7 +3350,7 @@ int fx_day_blindness (Scriptable* Owner, Actor* target, Effect* fx)
 	//saving throw penalty (bigger is better in iwd2)
 	HandleSaveBoni(target, -penalty, fx->TimingMode);
 
-	target->ToHit.HandleFxBonus(-penalty, fx->TimingMode==FX_DURATION_INSTANT_PERMANENT);
+	target->ToHit.HandleFxBonus(-penalty, false);
 
 	//decrease all skills by 1
 	for(int i=0;i<32;i++) {
@@ -3568,7 +3574,7 @@ int fx_alicorn_lance (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 }
 
 //449 CallLightning
-static Actor *GetRandomEnemySeen(Map *map, Actor *origin)
+static Actor *GetRandomEnemySeen(const Map *map, const Actor *origin)
 {
 	int type = GetGroup(origin);
 
@@ -3623,7 +3629,7 @@ int fx_call_lightning (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	}
 	int ret = FX_APPLIED;
 
-	Map *map = target->GetCurrentArea();
+	const Map *map = target->GetCurrentArea();
 	if (!map) return ret;
 
 	if (fx->Parameter1<=1) {
@@ -3736,8 +3742,9 @@ int fx_bane (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 		target->AddPortraitIcon(PI_BANE);
 		target->SetColorMod(0xff, RGBModifier::ADD, 20, 0, 0, 0x80);
 	}
-	target->ToHit.HandleFxBonus(-fx->Parameter1, fx->TimingMode==FX_DURATION_INSTANT_PERMANENT);
-	STAT_ADD( IE_MORALEBREAK, -fx->Parameter1);
+	int mod = signed(fx->Parameter1);
+	target->ToHit.HandleFxBonus(-mod, fx->TimingMode == FX_DURATION_INSTANT_PERMANENT);
+	STAT_ADD( IE_MORALEBREAK, -mod);
 	return FX_APPLIED;
 }
 
@@ -3869,7 +3876,7 @@ int fx_rapid_shot (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	if (target->PCStats->ExtraSettings[ES_RAPIDSHOT]) {
 		if (target->SetSpellState( SS_RAPIDSHOT)) return FX_NOT_APPLIED; //don't apply it twice
 
-		target->ToHit.HandleFxBonus(-2, fx->TimingMode==FX_DURATION_INSTANT_PERMANENT);
+		target->ToHit.HandleFxBonus(-2, false);
 		if (fx->FirstApply) {
 			//disable mutually exclusive feats
 			//none i know of

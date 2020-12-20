@@ -34,12 +34,12 @@
 
 #include "ie_types.h"
 
-#define VERSION_GEMRB "0.8.6-git"
+#define VERSION_GEMRB "0.8.7-git"
 
 #define GEMRB_STRING "GemRB v" VERSION_GEMRB
+#define PACKAGE "GemRB"
 
 #ifdef ANDROID
-# define PACKAGE "GemRB"
 # define S_IEXEC  S_IXUSR
 # define S_IREAD  S_IRUSR
 # define S_IWRITE S_IWUSR
@@ -186,20 +186,22 @@ class Scriptable;
 class Actor;
 
 GEM_EXPORT unsigned char GetOrient(const Point &s, const Point &d);
-GEM_EXPORT unsigned int Distance(const Point pos, const Point pos2);
-GEM_EXPORT unsigned int Distance(const Point pos, const Scriptable *b);
-GEM_EXPORT unsigned int SquaredMapDistance(Point pos, const Scriptable *b);
-GEM_EXPORT unsigned int PersonalDistance(Point p, const Scriptable *b);
-GEM_EXPORT unsigned int SquaredPersonalDistance(Point pos, const Scriptable *b);
+GEM_EXPORT unsigned int Distance(const Point &pos, const Point &pos2);
+GEM_EXPORT unsigned int Distance(const Point &pos, const Scriptable *b);
+GEM_EXPORT unsigned int SquaredDistance(const Point &pos, const Point &pos2);
+GEM_EXPORT unsigned int SquaredMapDistance(const Point &pos, const Scriptable *b);
+GEM_EXPORT unsigned int PersonalDistance(const Point &p, const Scriptable *b);
+GEM_EXPORT unsigned int SquaredPersonalDistance(const Point &pos, const Scriptable *b);
 GEM_EXPORT unsigned int Distance(const Scriptable *a, const Scriptable *b);
 GEM_EXPORT unsigned int SquaredDistance(const Scriptable *a, const Scriptable *b);
 GEM_EXPORT unsigned int PersonalDistance(const Scriptable *a, const Scriptable *b);
 GEM_EXPORT unsigned int SquaredPersonalDistance(const Scriptable *a, const Scriptable *b);
 GEM_EXPORT unsigned int SquaredMapDistance(const Scriptable *a, const Scriptable *b);
+GEM_EXPORT unsigned int PersonalLineDistance(const Point &v, const Point &w, const Scriptable *s, double *proj);
 GEM_EXPORT double Feet2Pixels(int feet, double angle);
 GEM_EXPORT bool WithinAudibleRange(const Actor *actor, const Point &dest);
 GEM_EXPORT bool WithinRange(const Actor *actor, const Point &dest, int distance);
-GEM_EXPORT bool WithinPersonalRange(const Actor *actor, const Scriptable *dest, int distance);
+GEM_EXPORT bool WithinPersonalRange(const Scriptable *actor, const Scriptable *dest, int distance);
 GEM_EXPORT int EARelation(const Scriptable *a, const Actor *b);
 GEM_EXPORT bool Schedule(ieDword schedule, ieDword time);
 GEM_EXPORT void CopyResRef(ieResRef d, const ieResRef s);

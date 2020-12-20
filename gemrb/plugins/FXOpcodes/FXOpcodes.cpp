@@ -95,8 +95,6 @@ static ieResRef *casting_glows = NULL;
 static int cgcount = -1;
 static ieResRef *spell_hits = NULL;
 static int shcount = -1;
-static int *spell_abilities = NULL;
-static ieDword splabcount = 0;
 static int *polymorph_stats = NULL;
 static int polystatcount = 0;
 
@@ -665,7 +663,7 @@ static EffectDesc effectnames[] = {
 	{ "Protection:Opcode", fx_protection_opcode, 0, -1 },
 	{ "Protection:Opcode2", fx_protection_opcode, 0, -1 },
 	{ "Protection:Projectile",fx_protection_from_projectile, 0, -1 },
-	{ "Protection:School",fx_generic_effect, 0, -1 },//overlay?
+	{ "Protection:School", fx_protection_school, 0, -1 },//overlay?
 	{ "Protection:SchoolDec",fx_protection_school_dec, 0, -1 },//overlay?
 	{ "Protection:SecondaryType",fx_protection_secondary_type, 0, -1 },//overlay?
 	{ "Protection:SecondaryTypeDec",fx_protection_secondary_type_dec, 0, -1 },//overlay?
@@ -773,7 +771,7 @@ static EffectDesc effectnames[] = {
 	{ "UncannyDodge", fx_uncanny_dodge, 0, -1 },
 	{ "Unknown", fx_unknown, EFFECT_NO_ACTOR, -1 },
 	{ "Unlock", fx_knock, EFFECT_NO_ACTOR, -1 }, //open doors/containers
-	{ "UnsummonCreature", fx_unsummon_creature, 0, -1 },
+	{ "UnsummonCreature", fx_unsummon_creature, EFFECT_NO_LEVEL_CHECK, -1 },
 	{ "Variable:StoreLocalVariable", fx_local_variable, 0, -1 },
 	{ "VisualAnimationEffect", fx_visual_animation_effect, 0, -1 }, //unknown
 	{ "VisualRangeModifier", fx_visual_range_modifier, 0, -1 },
@@ -840,7 +838,7 @@ static EffectRef fx_pst_jumble_curse_ref = { "JumbleCurse", -1 };  //PST specifi
 static EffectRef fx_bane_ref = { "Bane", -1 }; //iwd2
 static EffectRef fx_protection_from_animation_ref = { "Protection:Animation", -1 }; //0x128
 static EffectRef fx_change_bardsong_ref = { "ChangeBardSong", -1 };
-static EffectRef fx_eye_stone_ref = { "EyeOfFortitude", -1 };
+static EffectRef fx_eye_stone_ref = { "EyeOfStone", -1 };
 static EffectRef fx_eye_spirit_ref = { "EyeOfTheSpirit", -1 };
 static EffectRef fx_eye_venom_ref = { "EyeOfVenom", -1 };
 static EffectRef fx_eye_mind_ref = { "EyeOfTheMind", -1 };
@@ -857,8 +855,6 @@ static void Cleanup()
 {
 	core->FreeResRefTable(casting_glows, cgcount);
 	core->FreeResRefTable(spell_hits, shcount);
-	if(spell_abilities) free(spell_abilities);
-	spell_abilities=NULL;
 	if(polymorph_stats) free(polymorph_stats);
 	polymorph_stats=NULL;
 }
@@ -962,7 +958,7 @@ static void Resurrect(Scriptable *Owner, Actor *target, Effect *fx, Point &p)
 	if (area && target->GetCurrentArea()!=area) {
 		MoveBetweenAreasCore(target, area->GetScriptName(), p, fx->Parameter2, true);
 	}
-	target->Resurrect();
+	target->Resurrect(p);
 }
 
 
@@ -1012,14 +1008,14 @@ int fx_ac_vs_damage_type_modifier (Scriptable* /*Owner*/, Actor* target, Effect*
 	//convert to signed so -1 doesn't turn to an astronomical number
 	if (type == 16) { // natural AC
 		if (fx->TimingMode==FX_DURATION_INSTANT_PERMANENT) {
-			if ((signed)target->AC.GetNatural() > (signed)fx->Parameter1) {
+			if (target->AC.GetNatural() > (signed) fx->Parameter1) {
 				target->AC.SetNatural(fx->Parameter1);
 			}
 		} else {
-			if ((signed)target->AC.GetTotal() > (signed)fx->Parameter1) {
+			if (target->AC.GetTotal() > (signed) fx->Parameter1) {
 				// previously we were overriding the whole stat, but now we can be finegrained
 				// and reuse the deflection bonus, since iwd2 has its own version of this effect
-				target->AC.SetDeflectionBonus(- (target->AC.GetNatural()-fx->Parameter1));
+				target->AC.SetDeflectionBonus((signed) fx->Parameter1 - target->AC.GetNatural());
 			}
 		}
 		return FX_INSERT;
@@ -1159,7 +1155,8 @@ int fx_set_charmed_state (Scriptable* Owner, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_MIND) {
 		target->fxqueue.RemoveAllEffects(fx_eye_mind_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_MIND]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_MIND, false);
+		return FX_ABORT;
 	}
 
 	// if there are several effects on the queue, suppress all but the newest
@@ -1408,7 +1405,8 @@ int fx_death (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_SPIRIT) {
 		target->fxqueue.RemoveAllEffects(fx_eye_spirit_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_SPIRIT]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_SPIRIT, false);
+		return FX_ABORT;
 	}
 
 	//if the opcode of this effect is associated with Death2 (iwd2's death magic opcode) and
@@ -1422,7 +1420,7 @@ int fx_death (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	ieDword damagetype = 0;
 	switch (fx->Parameter2) {
 	case 1:
-		BASE_STATE_SET(STATE_FLAME); //not sure, should be charred
+		if (!target->GetStat(IE_DISABLECHUNKING)) BASE_STATE_SET(STATE_FLAME); //not sure, should be charred
 		damagetype = DAMAGE_FIRE;
 		break;
 	case 2:
@@ -1432,9 +1430,10 @@ int fx_death (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 		damagetype = DAMAGE_CRUSHING;
 		break;
 	case 8:
-		// TODO: also play "GORE.WAV" / "GORE2.WAV"
 		// Actor::CheckOnDeath handles the actual chunking
 		damagetype = DAMAGE_CRUSHING|DAMAGE_CHUNKING;
+		// bg1 & iwds have this file, bg2 & pst none
+		core->GetAudioDrv()->Play("GORE", SFX_CHAN_HITS, target->Pos.x, target->Pos.y);
 		break;
 	case 16:
 		BASE_STATE_SET(STATE_PETRIFIED);
@@ -1445,12 +1444,15 @@ int fx_death (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 		damagetype = DAMAGE_COLD;
 		break;
 	case 64:
-		BASE_STATE_SET(STATE_PETRIFIED);
+		if (!target->GetStat(IE_DISABLECHUNKING)) BASE_STATE_SET(STATE_PETRIFIED);
 		damagetype = DAMAGE_CRUSHING|DAMAGE_CHUNKING;
+		// file only in iwds
+		core->GetAudioDrv()->Play("GORE2", SFX_CHAN_HITS, target->Pos.x, target->Pos.y);
 		break;
 	case 128:
-		BASE_STATE_SET(STATE_FROZEN);
+		if (!target->GetStat(IE_DISABLECHUNKING)) BASE_STATE_SET(STATE_FROZEN);
 		damagetype = DAMAGE_COLD|DAMAGE_CHUNKING;
+		core->GetAudioDrv()->Play("GORE2", SFX_CHAN_HITS, target->Pos.x, target->Pos.y);
 		break;
 	case 256:
 		damagetype = DAMAGE_ELECTRICITY;
@@ -1463,11 +1465,17 @@ int fx_death (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 		damagetype = DAMAGE_ACID;
 	}
 
+	if (target->GetStat(IE_DISABLECHUNKING)) {
+		damagetype &= ~DAMAGE_CHUNKING;
+	}
+
 	if (damagetype!=DAMAGE_COLD) {
 		//these two bits are turned off on death
 		BASE_STATE_CURE(STATE_FROZEN|STATE_PETRIFIED);
 	}
-	BASE_SET(IE_MORALE, 10);
+	if (target->ShouldModifyMorale()) {
+		BASE_SET(IE_MORALE, 10);
+	}
 
 	// don't give xp in cutscenes
 	bool giveXP = true;
@@ -1495,44 +1503,13 @@ int fx_cure_frozen_state (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 }
 
 // 0x0F DexterityModifier
-
-#define CSA_DEX 0
-#define CSA_STR 1
-#define CSA_CNT 2
-static int SpellAbilityDieRoll(Actor *target, int which)
-{
-	if (which>=CSA_CNT) return 6;
-
-	ieDword cls = target->GetActiveClass();
-	if (!spell_abilities) {
-		AutoTable tab("clssplab");
-		if (!tab) {
-			spell_abilities = (int *) malloc(sizeof(int)*CSA_CNT);
-			for (int ab=0;ab<CSA_CNT;ab++) {
-				spell_abilities[ab*splabcount]=6;
-			}
-			splabcount=1;
-			return 6;
-		}
-		splabcount = tab->GetRowCount();
-		spell_abilities=(int *) malloc(sizeof(int)*splabcount*CSA_CNT);
-		for (int ab=0;ab<CSA_CNT;ab++) {
-			for (ieDword i=0;i<splabcount;i++) {
-				spell_abilities[ab*splabcount+i]=atoi(tab->QueryField(i,ab));
-			}
-		}
-	}
-	if (cls>=splabcount) cls=0;
-	return spell_abilities[which*splabcount+cls];
-}
-
 int fx_dexterity_modifier (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_dexterity_modifier(%2d): Mod: %d, Type: %d", fx->Opcode, fx->Parameter1, fx->Parameter2);
 
 	////how cat's grace: value is based on class
 	if (fx->Parameter2==3) {
-		fx->Parameter1 = core->Roll(1,SpellAbilityDieRoll(target,0),0);
+		fx->Parameter1 = core->Roll(1, gamedata->GetSpellAbilityDie(target, 0), 0);
 		fx->Parameter2 = 0;
 	}
 
@@ -1825,7 +1802,9 @@ int fx_morale_modifier (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 		return FX_NOT_APPLIED;
 	}
 
-	STAT_MOD( IE_MORALE );
+	if (target->ShouldModifyMorale()) {
+		STAT_MOD(IE_MORALE);
+	}
 	return FX_APPLIED;
 }
 
@@ -1842,7 +1821,8 @@ int fx_set_panic_state (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_MIND) {
 		target->fxqueue.RemoveAllEffects(fx_eye_mind_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_MIND]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_MIND, false);
+		return FX_ABORT;
 	}
 
 	if (fx->TimingMode==FX_DURATION_INSTANT_PERMANENT) {
@@ -1867,7 +1847,8 @@ int fx_set_poisoned_state (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_VENOM) {
 		target->fxqueue.RemoveAllEffects(fx_eye_venom_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_VENOM]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_VENOM, false);
+		return FX_ABORT;
 	}
 
 	int count = target->fxqueue.CountEffects(fx_poisoned_state_ref, fx->Parameter1, fx->Parameter2, fx->Resource);
@@ -2115,7 +2096,8 @@ int fx_set_silenced_state (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_FORT) {
 		target->fxqueue.RemoveAllEffects(fx_eye_fortitude_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_FORT]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_FORT, false);
+		return FX_ABORT;
 	}
 
 	if (fx->TimingMode==FX_DURATION_INSTANT_PERMANENT) {
@@ -2248,7 +2230,7 @@ int fx_strength_modifier (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	////how strength: value is based on class
 	////pst power of one also depends on this!
 	if (fx->Parameter2==3) {
-		fx->Parameter1 = core->Roll(1,SpellAbilityDieRoll(target,1),0);
+		fx->Parameter1 = core->Roll(1, gamedata->GetSpellAbilityDie(target, 1), 0);
 		fx->Parameter2 = 0;
 	}
 
@@ -2296,7 +2278,8 @@ int fx_set_stun_state (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_FORT) {
 		target->fxqueue.RemoveAllEffects(fx_eye_fortitude_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_FORT]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_FORT, false);
+		return FX_ABORT;
 	}
 
 	if (fx->Parameter2==2) {
@@ -2719,6 +2702,8 @@ int fx_summon_creature (Scriptable* Owner, Actor* target, Effect* fx)
 	//position of appearance is target's pos
 	int eamod = -1;
 	if (fx->Parameter2<6){
+		// NOTE: IESDP suggests eamods might have some wrong values
+		// keep it in mind if anything goes wrong
 		eamod = eamods[fx->Parameter2];
 	}
 
@@ -2892,7 +2877,8 @@ int fx_set_blind_state (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_FORT) {
 		target->fxqueue.RemoveAllEffects(fx_eye_fortitude_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_FORT]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_FORT, false);
+		return FX_ABORT;
 	}
 
 	//pst power word blind projectile support
@@ -3086,7 +3072,8 @@ int fx_set_deaf_state (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_FORT) {
 		target->fxqueue.RemoveAllEffects(fx_eye_fortitude_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_FORT]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_FORT, false);
+		return FX_ABORT;
 	}
 
 	//adopted IWD2 method, spellfailure will be handled internally based on the spell state
@@ -3434,13 +3421,13 @@ int fx_gold_modifier (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 		STAT_MOD( IE_GOLD );
 		return FX_NOT_APPLIED;
 	}
-	ieDword gold;
+	int gold;
 	Game *game = core->GetGame();
 	//for party members, the gold is stored in the game object
 	switch( fx->Parameter2) {
 		case MOD_ADDITIVE:
 			if (core->HasFeature(GF_FIXED_MORALE_OPCODE)) {
-				gold = (ieDword) -fx->Parameter1;
+				gold = - signed(fx->Parameter1);
 			} else {
 				gold = fx->Parameter1;
 			}
@@ -3452,7 +3439,7 @@ int fx_gold_modifier (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 			gold = game->PartyGold*fx->Parameter1/100-game->PartyGold;
 			break;
 		default:
-			gold = (ieDword) -fx->Parameter1;
+			gold = - signed(fx->Parameter1);
 			break;
 	}
 	game->AddGold (gold);
@@ -3692,11 +3679,11 @@ int fx_mirror_image (Scriptable* Owner, Actor* target, Effect* fx)
 
 	if (fx->Parameter2) {
 		images = 1; //reflection
-	}
-	else {
+	} else {
 		// the original uses only IE_LEVEL, but that can be awefully bad in
 		// the case of dual- and multiclasses
 		unsigned int level = target->GetCasterLevel(IE_SPL_WIZARD);
+		if (!level) level = target->GetAnyActiveCasterLevel();
 		// 2-8 mirror images
 		images = level/3 + 2;
 		if (images > 8) images = 8;
@@ -3798,11 +3785,19 @@ int fx_visual_animation_effect (Scriptable* /*Owner*/, Actor* /*target*/, Effect
 int fx_create_inventory_item (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_create_inventory_item(%2d)", fx->Opcode);
-	target->inventory.AddSlotItemRes( fx->Resource, SLOT_ONLYINVENTORY, fx->Parameter1, fx->Parameter3, fx->Parameter4 );
+	// EEs added randomness that can't hurt elsewhere
+	ieResRef *refs[] = { &fx->Resource, &fx->Resource2, &fx->Resource3 };
+	char count = 1;
+	if (fx->Resource2[0]) count++;
+	if (fx->Resource3[0]) count++;
+	int choice = RAND(0, count - 1);
+
+	target->inventory.AddSlotItemRes(*refs[choice], SLOT_ONLYINVENTORY, fx->Parameter1, fx->Parameter3, fx->Parameter4);
 	if ((fx->TimingMode&0xff) == FX_DURATION_INSTANT_LIMITED) {
 		//if this effect has expiration, then it will remain as a remove_item
 		//on the effect queue, inheriting all the parameters
 		fx->Opcode=EffectQueue::ResolveEffect(fx_remove_inventory_item_ref);
+		CopyResRef(fx->Resource, *refs[choice]);
 		fx->TimingMode=FX_DURATION_DELAY_PERMANENT;
 		return FX_APPLIED;
 	}
@@ -3898,6 +3893,22 @@ int fx_movement_modifier (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	//iwd2 aegis doesn't protect against grease/acid fog slowness, but that is
 	//definitely a bug
 	if (target->HasSpellState(SS_AEGIS)) return FX_NOT_APPLIED;
+
+	// bg1 crashes on 13+, 9&10 are equal to 8 and 11 (boots of speed) equals to roughly 15.6 #129
+	if (core->HasFeature(GF_BREAKABLE_WEAPONS) && fx->Parameter2 == MOD_ABSOLUTE) {
+		switch (fx->Parameter1) {
+			case 9:
+			case 10:
+				fx->Parameter1 = 8;
+				break;
+			case 11:
+			case 30:
+				fx->Parameter1 = 15;
+				break;
+			default:
+				break;
+		}
+	}
 
 	ieDword value = target->GetStat(IE_MOVEMENTRATE);
 	STAT_MOD(IE_MOVEMENTRATE);
@@ -4047,7 +4058,7 @@ int fx_set_bless_state (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	target->SetSpellState(SS_BLESS);
 	target->ToHit.HandleFxBonus(fx->Parameter1, fx->TimingMode==FX_DURATION_INSTANT_PERMANENT);
 	STAT_ADD( IE_DAMAGEBONUS, fx->Parameter1);
-	STAT_ADD( IE_MORALEBREAK, fx->Parameter1);
+	if (target->ShouldModifyMorale()) STAT_ADD(IE_MORALE, fx->Parameter1);
 	if (core->HasFeature(GF_ENHANCED_EFFECTS)) {
 		target->AddPortraitIcon(PI_BLESS);
 		target->SetColorMod(0xff, RGBModifier::ADD, 30, 0xc0, 0x80, 0);
@@ -4121,8 +4132,9 @@ int fx_set_petrified_state (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_STONE) {
 		target->fxqueue.RemoveAllEffects(fx_eye_stone_ref);
-		target->spellbook.RemoveSpell(SevenEyes[EYE_FORT]);
-		return FX_NOT_APPLIED;
+		target->spellbook.RemoveSpell(SevenEyes[EYE_STONE]);
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_STONE, false);
+		return FX_ABORT;
 	}
 
 	BASE_STATE_SET( STATE_PETRIFIED );
@@ -4356,7 +4368,6 @@ int fx_casting_glow (Scriptable* Owner, Actor* target, Effect* fx)
 		sca->YPos+=fx->PosY+ypos_by_direction[target->GetOrientation()];
 		sca->ZPos+=heightmod;
 		sca->SetBlend();
-		sca->PlayOnce();
 		if (fx->Duration) {
 			sca->SetDefaultDuration(fx->Duration-core->GetGame()->GameTime);
 		} else {
@@ -4861,6 +4872,11 @@ int fx_cure_hold_state (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 }
 
 // 0xa3 FreeAction
+// if needed, make this match bg2 behaviour more closely: it removed 0x7e (126) effects with duration/permanent
+// and param2 == MOD_ABSOLUTE IF the modified movement rate is lower than the original. This is, of course,
+// crap. It should remove individual 0x7e effects if they lower the movement rate (or remove all of them, which
+// is what we do now).
+// NOTE: it didn't remove 0xb0 effects, so perhaps fx_movement_modifier_ref needs to be changed to refer to 0x7e
 int fx_cure_slow_state (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_cure_slow_state(%2d): Mod: %d, Type: %d", fx->Opcode, fx->Parameter1, fx->Parameter2);
@@ -4932,12 +4948,11 @@ int fx_remove_creature (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_remove_creature(%2d)", fx->Opcode);
 
-	Map *map = NULL;
+	const Map *map;
 
 	if (target) {
 		map = target->GetCurrentArea();
-	}
-	else {
+	} else {
 		map = core->GetGame()->GetCurrentArea();
 	}
 	Actor *actor = target;
@@ -5443,7 +5458,7 @@ int fx_familiar_constitution_loss (Scriptable* /*Owner*/, Actor* target, Effect*
 	delete newfx;
 
 	//remove the maximum hp bonus
-	newfx = EffectQueue::CreateEffect(fx_maximum_hp_modifier_ref, (ieDword) -fx->Parameter1, 3, FX_DURATION_INSTANT_PERMANENT);
+	newfx = EffectQueue::CreateEffect(fx_maximum_hp_modifier_ref, -fx->Parameter1, 3, FX_DURATION_INSTANT_PERMANENT);
 	core->ApplyEffect(newfx, master, master);
 	delete newfx;
 
@@ -5653,7 +5668,8 @@ int fx_power_word_kill (Scriptable* Owner, Actor* target, Effect* fx)
 	if (target->GetStat(IE_EXTSTATE_ID) & EXTSTATE_EYE_SPIRIT) {
 		target->fxqueue.RemoveAllEffects(fx_eye_spirit_ref);
 		target->spellbook.RemoveSpell(SevenEyes[EYE_SPIRIT]);
-		return FX_NOT_APPLIED;
+		target->SetBaseBit(IE_EXTSTATE_ID, EXTSTATE_EYE_SPIRIT, false);
+		return FX_ABORT;
 	}
 
 	if (fx->Parameter1) {
@@ -5860,16 +5876,17 @@ int fx_leveldrain_modifier (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 
 	//never subtract more than the maximum hitpoints
 	ieDword x = STAT_GET(IE_MAXHITPOINTS)-1;
-	if (fx->Parameter1*4<x) {
-		x=fx->Parameter1*4;
+	int mod = signed(fx->Parameter1);
+	if (mod * 4 < signed(x)) {
+		x = mod * 4;
 	}
-	STAT_ADD(IE_LEVELDRAIN, fx->Parameter1);
+	STAT_ADD(IE_LEVELDRAIN, mod);
 	STAT_SUB(IE_MAXHITPOINTS, x);
-	HandleBonus(target, IE_SAVEVSDEATH, -fx->Parameter1, fx->TimingMode);
-	HandleBonus(target, IE_SAVEVSWANDS, -fx->Parameter1, fx->TimingMode);
-	HandleBonus(target, IE_SAVEVSPOLY, -fx->Parameter1, fx->TimingMode);
-	HandleBonus(target, IE_SAVEVSBREATH, -fx->Parameter1, fx->TimingMode);
-	HandleBonus(target, IE_SAVEVSSPELL, -fx->Parameter1, fx->TimingMode);
+	HandleBonus(target, IE_SAVEVSDEATH, -mod, fx->TimingMode);
+	HandleBonus(target, IE_SAVEVSWANDS, -mod, fx->TimingMode);
+	HandleBonus(target, IE_SAVEVSPOLY, -mod, fx->TimingMode);
+	HandleBonus(target, IE_SAVEVSBREATH, -mod, fx->TimingMode);
+	HandleBonus(target, IE_SAVEVSSPELL, -mod, fx->TimingMode);
 
 	target->AddPortraitIcon(PI_LEVELDRAIN);
 	//decrease current hitpoints on first apply
@@ -6134,7 +6151,7 @@ int fx_cast_spell_on_condition (Scriptable* Owner, Actor* target, Effect* fx)
 
 	// get the actor to cast spells at
 	Actor *actor = NULL;
-	Map *map = target->GetCurrentArea();
+	const Map *map = target->GetCurrentArea();
 	if (!map) return FX_APPLIED;
 
 	switch (fx->Parameter1) {
@@ -6541,6 +6558,7 @@ int fx_puppet_marker (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 int fx_disintegrate (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_disintegrate(%2d): Mod: %d, Type: %d", fx->Opcode, fx->Parameter1, fx->Parameter2);
+	if (target->GetStat(IE_DISABLECHUNKING)) return FX_NOT_APPLIED;
 	if (EffectQueue::match_ids( target, fx->Parameter2, fx->Parameter1) ) {
 		//convert it to a death opcode or apply the new effect?
 		fx->Opcode = EffectQueue::ResolveEffect(fx_death_ref);
@@ -6713,17 +6731,14 @@ int fx_change_bardsong (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 int fx_set_area_effect (Scriptable* Owner, Actor* target, Effect* fx)
 {
 	if(0) print("fx_set_trap(%2d): Mod: %d, Type: %d", fx->Opcode, fx->Parameter1, fx->Parameter2);
-	ieDword skill, roll;
-	Map *map;
-
-	map = target->GetCurrentArea();
+	ieDword skill, roll, level;
+	const Map *map = target->GetCurrentArea();
 	if (!map) return FX_NOT_APPLIED;
 
 	proIterator iter;
 
-	//check if trap count is over an amount (only saved traps count)
-	//actually, only projectiles in trigger phase should count here
-	if (map->GetTrapCount(iter)>6) {
+	// check if the new trap count is cheesy (only saved traps count)
+	if (map->GetTrapCount(iter) + 1 > gamedata->GetTrapLimit(Owner)) {
 		displaymsg->DisplayConstantStringName(STR_NOMORETRAP, DMC_WHITE, target);
 		return FX_NOT_APPLIED;
 	}
@@ -6735,11 +6750,17 @@ int fx_set_area_effect (Scriptable* Owner, Actor* target, Effect* fx)
 	}
 
 	if (Owner->Type==ST_ACTOR) {
-		skill = ((Actor *)Owner)->GetStat(IE_SETTRAPS);
+		const Actor *caster = (Actor *) Owner;
+		skill = caster->GetStat(IE_SETTRAPS);
 		roll = target->LuckyRoll(1,100,0,LR_NEGATIVE);
+		// assuming functioning thief, but allowing modded exceptions
+		// thieves aren't casters, so 0 for a later spell type lookup is not good enough
+		level = caster->GetThiefLevel();
+		level = level ? level : caster->GetXPLevel(false);
 	} else {
 		roll=0;
 		skill=0;
+		level = 0;
 	}
 
 	if (roll>skill) {
@@ -6764,7 +6785,7 @@ int fx_set_area_effect (Scriptable* Owner, Actor* target, Effect* fx)
 	// save the current spell ref, so the rest of its effects can be applied afterwards
 	ieResRef OldSpellResRef;
 	memcpy(OldSpellResRef, Owner->SpellResRef, sizeof(OldSpellResRef));
-	Owner->DirectlyCastSpellPoint(Point(fx->PosX, fx->PosY), fx->Resource, 0, 1, false);
+	Owner->DirectlyCastSpellPoint(Point(fx->PosX, fx->PosY), fx->Resource, level, 1, false);
 	Owner->SetSpellResRef(OldSpellResRef);
 	return FX_NOT_APPLIED;
 }
@@ -7025,7 +7046,7 @@ int fx_screenshake (Scriptable* /*Owner*/, Actor* /*target*/, Effect* fx)
 		break;
 	case 1:
 		x=fx->Parameter1;
-		y=-fx->Parameter1;
+		y = - signed(fx->Parameter1);
 		break;
 	case 2:
 		//gemrb addition
@@ -7124,7 +7145,7 @@ int fx_remove_projectile (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 	if(0) print("fx_remove_projectile(%2d): Mod: %d, Type: %d", fx->Opcode, fx->Parameter1, fx->Parameter2);
 
 	if (!target) return FX_NOT_APPLIED;
-	Map *area = target->GetCurrentArea();
+	const Map *area = target->GetCurrentArea();
 	if (!area) return FX_NOT_APPLIED;
 
 	switch (fx->Parameter2) {
@@ -7176,7 +7197,7 @@ int fx_teleport_to_target (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 		return FX_NOT_APPLIED;
 	}
 
-	Map *map = target->GetCurrentArea();
+	const Map *map = target->GetCurrentArea();
 	if (map) {
 		Object oC;
 		oC.objectFields[0]=EA_ENEMY;
@@ -7186,7 +7207,7 @@ int fx_teleport_to_target (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 			return FX_NOT_APPLIED;
 		}
 		int rnd = core->Roll(1,tgts->Count(),-1);
-		Actor *victim = (Actor *) tgts->GetTarget(rnd, ST_ACTOR);
+		const Actor *victim = (Actor *) tgts->GetTarget(rnd, ST_ACTOR);
 		delete tgts;
 		if (victim && PersonalDistance(victim, target)>20) {
 			target->SetPosition( victim->Pos, true, 0 );
@@ -7399,7 +7420,9 @@ int fx_existance_delay_modifier (Scriptable* /*Owner*/, Actor* target, Effect* f
 	STAT_SET( IE_EXISTANCEDELAY, fx->Parameter1 );
 	return FX_APPLIED;
 }
-//0x127 DisableChunk
+//0x127 DisableChunk / DisablePermanentDeath
+// protects against chunking, disintegration, permanent death from the kill opcode (causes normal death instead)
+// doesn't prevent normal petrification (from the opcode) and doesn't protect from normal freezing (eg. from Cone of Cold)
 int fx_disable_chunk_modifier (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_disable_chunk_modifier(%2d): Mod: %d, Type: %d", fx->Opcode, fx->Parameter1, fx->Parameter2);
@@ -7562,7 +7585,7 @@ int fx_right_to_hit_modifier (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 int fx_reveal_tracks (Scriptable* /*Owner*/, Actor* target, Effect* fx)
 {
 	if(0) print("fx_reveal_tracks(%2d): Distance: %d", fx->Opcode, fx->Parameter1);
-	Map *map = target->GetCurrentArea();
+	const Map *map = target->GetCurrentArea();
 	if (!map) return FX_APPLIED;
 	if (!fx->Parameter2) {
 		fx->Parameter2=1;
