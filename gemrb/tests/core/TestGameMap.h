@@ -134,6 +134,15 @@ public:
 		return actor;
 	}
 
+	/** Prints the current state of the map */
+	void Print()
+	{
+		auto searchMap = drawn.Render();
+		for (const auto& cell : searchMap) {
+			std::cerr << cell << std::endl;
+		}
+	}
+
 private:
 	static Map* MakeMapFor(const TestSearchMap& drawn)
 	{
