@@ -842,7 +842,7 @@ TEST_P(BumpTest, ABumpableCrowdIsPushedAsideAndComesBack)
 
 // Solid: the crowd cannot be moved, so the walker has to find the way around the half-circle. No
 // NPC may move for the whole run, and the walker may not be stopped by the wall of bodies.
-TEST_P(BumpTest, DISABLED_ASolidCrowdIsWalkedAroundWithoutMoving)
+TEST_P(BumpTest, ASolidCrowdIsWalkedAroundWithoutMoving)
 {
 	TestGameMap live { GetParam() };
 	Actor* pc = PcOf(live);
