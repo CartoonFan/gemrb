@@ -708,8 +708,8 @@ TEST_F(TraversabilityLiveTest, IsOverConsistentFromEveryPixelOfItsTiles)
 	Point test;
 	for (int oy = 0; oy < 3; ++oy) {
 		for (int ox = 0; ox < 3; ++ox) {
-			test.x = (ox + 2) * SEARCHMAP_TILE_WIDTH / 2 + 1 * (ox - 1);
-			test.y = (oy + 2) * SEARCHMAP_TILE_HEIGHT / 2 + 1 * (oy - 1);
+			test.x = top.x + ox * SEARCHMAP_TILE_WIDTH / 2 - (ox ? 0 : 1);
+			test.y = top.y + oy * SEARCHMAP_TILE_HEIGHT / 2 - (oy ? 0 : 1);
 			if (test == center) continue;
 			checkFromPixels(top, test, true);
 		}

@@ -75,8 +75,8 @@ bool Selectable::IsOverCircle(const Point& P, const Point& CenterPos, int csize)
 {
 	if (csize < 2) {
 		Point d = P - CenterPos;
-		if (d.x <= -SEARCHMAP_TILE_WIDTH / 2 || d.x > SEARCHMAP_TILE_WIDTH / 2) return false;
-		if (d.y <= -SEARCHMAP_TILE_HEIGHT / 2 || d.y > SEARCHMAP_TILE_HEIGHT / 2) return false;
+		if (d.x <= -SEARCHMAP_TILE_WIDTH / 2 || d.x >= SEARCHMAP_TILE_WIDTH / 2) return false;
+		if (d.y <= -SEARCHMAP_TILE_HEIGHT / 2 || d.y >= SEARCHMAP_TILE_HEIGHT / 2) return false;
 		return true;
 	}
 	// TODO: make sure to match the actual blocking shape; use GetEllipseSize/GetEllipseOffset instead?
