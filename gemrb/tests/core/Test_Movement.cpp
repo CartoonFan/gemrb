@@ -796,10 +796,169 @@ protected:
 	}
 };
 
+TEST_F(BumpTest, NoBumpingIfSpaceAvailable)
+{
+	TestGameMap live {
+		"#########",
+		"#1..a..E#",
+		"####.####",
+		"#########"
+	};
+	Actor* pc = PcOf(live);
+	ASSERT_NE(pc, nullptr);
+	pc->SetBase(IE_EA, EA_PC);
+
+	std::vector<Point> home;
+	std::vector<Actor*> crowd = CrowdOf(live, home);
+	ASSERT_EQ(crowd.size(), size_t(1));
+	for (Actor* npc : crowd) npc->SetBase(IE_EA, EA_NEUTRAL);
+
+	ASSERT_TRUE(pc->ValidTarget(GA_CAN_BUMP)) << "the walker has to be allowed to bump";
+	for (Actor* npc : crowd) {
+		ASSERT_TRUE(npc->ValidTarget(GA_ONLY_BUMPABLE)) << "the crowd has to be bumpable for this run";
+	}
+
+	const Point goal = live.Drawing().End();
+	pc->WalkTo(goal, 0, 0);
+	ASSERT_TRUE(pc->InMove());
+
+	bool anybodyMoved = false;
+	for (int frame = 0; frame < 400 && pc->InMove(); ++frame) {
+		TestGameLoop::RunFrame();
+		if (!CrowdIsHome(crowd, home)) anybodyMoved = true;
+	}
+	EXPECT_FALSE(anybodyMoved) << "the walker must not shove the bumpable crowd aside";
+	EXPECT_EQ(pc->Pos, goal) << "the walker has to reach the goal";
+}
+
+// Simplest case: no movement possible without bumping an actor away
+// note that the actor gets bumped back over the pc
+TEST_F(BumpTest, ABumpableCrowdInAChokepointIsBumped)
+{
+	TestGameMap live {
+		"#########",
+		"#1..a..E#",
+		"#########"
+	};
+	Actor* pc = PcOf(live);
+	ASSERT_NE(pc, nullptr);
+	pc->SetBase(IE_EA, EA_PC);
+
+	std::vector<Point> home;
+	std::vector<Actor*> crowd = CrowdOf(live, home);
+	ASSERT_EQ(crowd.size(), size_t(1));
+	for (Actor* npc : crowd) npc->SetBase(IE_EA, EA_NEUTRAL);
+
+	ASSERT_TRUE(pc->ValidTarget(GA_CAN_BUMP)) << "the walker has to be allowed to bump";
+	for (Actor* npc : crowd) {
+		ASSERT_TRUE(npc->ValidTarget(GA_ONLY_BUMPABLE)) << "the crowd has to be bumpable for this run";
+	}
+
+	const Point goal = live.Drawing().End();
+	pc->WalkTo(goal, 0, 0);
+	ASSERT_TRUE(pc->InMove());
+
+	bool anybodyMoved = false;
+	for (int frame = 0; frame < 400 && pc->InMove(); ++frame) {
+		TestGameLoop::RunFrame();
+		if (!CrowdIsHome(crowd, home)) anybodyMoved = true;
+	}
+	EXPECT_TRUE(anybodyMoved) << "the walker must actually shove the bumpable crowd aside";
+	EXPECT_EQ(pc->Pos, goal) << "the walker has to come out on the far side of the crowd";
+
+	// the shoved actors settle back home once the walker is out of the way
+	for (int frame = 0; frame < 400; ++frame) {
+		TestGameLoop::RunFrame();
+		if (CrowdIsHome(crowd, home)) break;
+	}
+	for (size_t i = 0; i < crowd.size(); ++i) {
+		EXPECT_EQ(crowd[i]->Pos, home[i]) << "NPC " << i << " has to come back to where it started";
+	}
+}
+
+TEST_F(BumpTest, CanBumpSequentialActors)
+{
+	TestGameMap live {
+		"#########",
+		"#1..aa.E#",
+		"#########"
+	};
+	Actor* pc = PcOf(live);
+	ASSERT_NE(pc, nullptr);
+	pc->SetBase(IE_EA, EA_PC);
+
+	std::vector<Point> home;
+	std::vector<Actor*> crowd = CrowdOf(live, home);
+	ASSERT_EQ(crowd.size(), size_t(2));
+	for (Actor* npc : crowd) npc->SetBase(IE_EA, EA_NEUTRAL);
+
+	ASSERT_TRUE(pc->ValidTarget(GA_CAN_BUMP)) << "the walker has to be allowed to bump";
+	for (Actor* npc : crowd) {
+		ASSERT_TRUE(npc->ValidTarget(GA_ONLY_BUMPABLE)) << "the crowd has to be bumpable for this run";
+	}
+
+	const Point goal = live.Drawing().End();
+	pc->WalkTo(goal, 0, 0);
+	ASSERT_TRUE(pc->InMove());
+
+	bool anybodyMoved = false;
+	for (int frame = 0; frame < 400 && pc->InMove(); ++frame) {
+		TestGameLoop::RunFrame();
+		if (!CrowdIsHome(crowd, home)) anybodyMoved = true;
+	}
+	EXPECT_TRUE(anybodyMoved) << "the walker must actually shove the bumpable crowd aside";
+	EXPECT_EQ(pc->Pos, goal) << "the walker has to come out on the far side of the crowd";
+
+	// the shoved actors settle back home once the walker is out of the way
+	for (int frame = 0; frame < 400; ++frame) {
+		TestGameLoop::RunFrame();
+		if (CrowdIsHome(crowd, home)) break;
+	}
+	for (size_t i = 0; i < crowd.size(); ++i) {
+		EXPECT_EQ(crowd[i]->Pos, home[i]) << "NPC " << i << " has to come back to where it started";
+	}
+}
+
+// the last actor has no empty space to be bumped to, so make sure we don't tunnel through or anything weirder
+TEST_F(BumpTest, CantBumpIfNoSpace)
+{
+	TestGameMap live {
+		"#########",
+		"#1..aaaE#",
+		"#########"
+	};
+	Actor* pc = PcOf(live);
+	ASSERT_NE(pc, nullptr);
+	pc->SetBase(IE_EA, EA_PC);
+
+	std::vector<Point> home;
+	std::vector<Actor*> crowd = CrowdOf(live, home);
+	ASSERT_EQ(crowd.size(), size_t(3));
+	for (Actor* npc : crowd) npc->SetBase(IE_EA, EA_NEUTRAL);
+
+	ASSERT_TRUE(pc->ValidTarget(GA_CAN_BUMP)) << "the walker has to be allowed to bump";
+	for (Actor* npc : crowd) {
+		ASSERT_TRUE(npc->ValidTarget(GA_ONLY_BUMPABLE)) << "the crowd has to be bumpable for this run";
+	}
+
+	const Point goal = live.Drawing().End();
+	pc->WalkTo(goal, 0, 0);
+	ASSERT_TRUE(pc->InMove());
+
+	bool anybodyMoved = false;
+	for (int frame = 0; frame < 400 && pc->InMove(); ++frame) {
+		TestGameLoop::RunFrame();
+		if (!CrowdIsHome(crowd, home)) anybodyMoved = true;
+	}
+	EXPECT_TRUE(anybodyMoved) << "the walker must actually shove the bumpable crowd aside";
+	EXPECT_NE(pc->Pos, goal) << "the walker should not reach the goal";
+}
+
 // Bumpable: the walker shoulders through the half-circle. Every NPC the walker touches has to
 // actually leave its tile, and once the walker is past, every one of them has to find its way back
 // to where it stood before.
-TEST_P(BumpTest, ABumpableCrowdIsPushedAsideAndComesBack)
+// The test was disabled for: bumping should be avoided if it's not the only option
+TEST_P(BumpTest, DISABLED_ABumpableCrowdIsPushedAsideAndComesBack)
 {
 	TestGameMap live { GetParam() };
 	Actor* pc = PcOf(live);
