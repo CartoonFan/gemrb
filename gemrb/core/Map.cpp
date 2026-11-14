@@ -534,29 +534,6 @@ void Map::UpdateScripts()
 						   actor->GetScriptName(), actor->Pos, actor->Destination);
 				actor->NewPath();
 			}
-		} else if (actor->InMove() && actor->GetSpeed()) {
-			// Make actors pathfind if there are others nearby
-			// in order to avoid bumping when possible
-			// do it more often out of combat, so they're less likely to get stuck
-			unsigned int radius = actor->GetAnims()->GetCircleSize();
-			if (!actor->ValidTarget(GA_CAN_BUMP)) radius = actor->CircleSize2Radius() * 4;
-			const Actor* nearActor = GetActorInRadius(actor->Pos, GA_NO_DEAD | GA_NO_UNSCHEDULED | GA_NO_SELF, radius, actor);
-			if (nearActor) {
-				actor->NewPath();
-			}
-			Point lastPos = actor->Pos;
-			DoStepForActor(actor, time);
-
-			// as a fallback, temporarily enable bumping if we're stuck
-			actor->UpdatePosCounter(lastPos == actor->Pos);
-			if (actor->Timers.lastPosTicks > 10 && core->InCutSceneMode() && !actor->ValidTarget(GA_CAN_BUMP)) {
-				static EffectRef npcBumpRef = { "NPCBump", -1 };
-				auto fx = EffectQueue::CreateEffect(npcBumpRef, 1, 0, FX_DURATION_INSTANT_LIMITED);
-				if (fx) {
-					fx->Duration = core->Time.round_sec;
-					core->ApplyEffect(std::move(fx), actor, actor);
-				}
-			}
 		} else {
 			DoStepForActor(actor, time);
 		}
