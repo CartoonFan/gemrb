@@ -736,7 +736,7 @@ static std::vector<std::string> HalfCircleAroundPc()
 		"#.....E.....#",
 		"#...........#",
 		"#...........#",
-		"#...b.b.b...#",
+		"#...b.b.b...#", // intentintionally overlapping standing footprints
 		"#...b.2.b...#",
 		"#...........#",
 		"#...........#",
