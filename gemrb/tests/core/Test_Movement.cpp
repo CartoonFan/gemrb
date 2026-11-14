@@ -768,21 +768,37 @@ protected:
 	{
 		for (size_t i = 0; i < live.ActorCount(); ++i) {
 			Actor* actor = live.ActorOf(i);
-			if (actor && actor->InParty) return actor;
+			if (actor && actor->InParty) {
+				actor->SetBase(IE_EA, EA_PC);
+				if (!actor->ValidTarget(GA_CAN_BUMP)) {
+					ADD_FAILURE() << "the walker has to be allowed to bump";
+				}
+				return actor;
+			}
 		}
 		ADD_FAILURE() << "the drawing has to carry a party member";
 		return nullptr;
 	}
 
 	// The NPCs around the PC, in reading order, together with where they started.
-	static std::vector<Actor*> CrowdOf(const TestGameMap& live, std::vector<Point>& home)
+	static std::vector<Actor*> CrowdOf(const TestGameMap& live, std::vector<Point>& home, size_t expectedSize, Actor::stat_t ea)
 	{
 		std::vector<Actor*> crowd;
 		for (size_t i = 0; i < live.ActorCount(); ++i) {
 			Actor* actor = live.ActorOf(i);
 			if (!actor || actor->InParty) continue;
+			actor->SetBase(IE_EA, ea);
+			bool bumpable = actor->ValidTarget(GA_ONLY_BUMPABLE);
+			if (ea < EA_EVILCUTOFF && !bumpable) {
+				ADD_FAILURE() << "the crowd has to be bumpable for this run";
+			} else if (ea >= EA_EVILCUTOFF && bumpable) {
+				ADD_FAILURE() << "the crowd has to be solid for this run";
+			}
 			crowd.push_back(actor);
 			home.push_back(actor->Pos);
+		}
+		if (crowd.size() != expectedSize) {
+			ADD_FAILURE() << "crowd has unexpected number of members";
 		}
 		return crowd;
 	}
@@ -805,18 +821,8 @@ TEST_F(BumpTest, NoBumpingIfSpaceAvailable)
 		"#########"
 	};
 	Actor* pc = PcOf(live);
-	ASSERT_NE(pc, nullptr);
-	pc->SetBase(IE_EA, EA_PC);
-
 	std::vector<Point> home;
-	std::vector<Actor*> crowd = CrowdOf(live, home);
-	ASSERT_EQ(crowd.size(), size_t(1));
-	for (Actor* npc : crowd) npc->SetBase(IE_EA, EA_NEUTRAL);
-
-	ASSERT_TRUE(pc->ValidTarget(GA_CAN_BUMP)) << "the walker has to be allowed to bump";
-	for (Actor* npc : crowd) {
-		ASSERT_TRUE(npc->ValidTarget(GA_ONLY_BUMPABLE)) << "the crowd has to be bumpable for this run";
-	}
+	std::vector<Actor*> crowd = CrowdOf(live, home, 1, EA_NEUTRAL);
 
 	const Point goal = live.Drawing().End();
 	pc->WalkTo(goal, 0, 0);
@@ -841,18 +847,8 @@ TEST_F(BumpTest, ABumpableCrowdInAChokepointIsBumped)
 		"#########"
 	};
 	Actor* pc = PcOf(live);
-	ASSERT_NE(pc, nullptr);
-	pc->SetBase(IE_EA, EA_PC);
-
 	std::vector<Point> home;
-	std::vector<Actor*> crowd = CrowdOf(live, home);
-	ASSERT_EQ(crowd.size(), size_t(1));
-	for (Actor* npc : crowd) npc->SetBase(IE_EA, EA_NEUTRAL);
-
-	ASSERT_TRUE(pc->ValidTarget(GA_CAN_BUMP)) << "the walker has to be allowed to bump";
-	for (Actor* npc : crowd) {
-		ASSERT_TRUE(npc->ValidTarget(GA_ONLY_BUMPABLE)) << "the crowd has to be bumpable for this run";
-	}
+	std::vector<Actor*> crowd = CrowdOf(live, home, 1, EA_NEUTRAL);
 
 	const Point goal = live.Drawing().End();
 	pc->WalkTo(goal, 0, 0);
@@ -884,18 +880,8 @@ TEST_F(BumpTest, CanBumpSequentialActors)
 		"#########"
 	};
 	Actor* pc = PcOf(live);
-	ASSERT_NE(pc, nullptr);
-	pc->SetBase(IE_EA, EA_PC);
-
 	std::vector<Point> home;
-	std::vector<Actor*> crowd = CrowdOf(live, home);
-	ASSERT_EQ(crowd.size(), size_t(2));
-	for (Actor* npc : crowd) npc->SetBase(IE_EA, EA_NEUTRAL);
-
-	ASSERT_TRUE(pc->ValidTarget(GA_CAN_BUMP)) << "the walker has to be allowed to bump";
-	for (Actor* npc : crowd) {
-		ASSERT_TRUE(npc->ValidTarget(GA_ONLY_BUMPABLE)) << "the crowd has to be bumpable for this run";
-	}
+	std::vector<Actor*> crowd = CrowdOf(live, home, 2, EA_NEUTRAL);
 
 	const Point goal = live.Drawing().End();
 	pc->WalkTo(goal, 0, 0);
@@ -928,18 +914,8 @@ TEST_F(BumpTest, CantBumpIfNoSpace)
 		"#########"
 	};
 	Actor* pc = PcOf(live);
-	ASSERT_NE(pc, nullptr);
-	pc->SetBase(IE_EA, EA_PC);
-
 	std::vector<Point> home;
-	std::vector<Actor*> crowd = CrowdOf(live, home);
-	ASSERT_EQ(crowd.size(), size_t(3));
-	for (Actor* npc : crowd) npc->SetBase(IE_EA, EA_NEUTRAL);
-
-	ASSERT_TRUE(pc->ValidTarget(GA_CAN_BUMP)) << "the walker has to be allowed to bump";
-	for (Actor* npc : crowd) {
-		ASSERT_TRUE(npc->ValidTarget(GA_ONLY_BUMPABLE)) << "the crowd has to be bumpable for this run";
-	}
+	std::vector<Actor*> crowd = CrowdOf(live, home, 3, EA_NEUTRAL);
 
 	const Point goal = live.Drawing().End();
 	pc->WalkTo(goal, 0, 0);
@@ -962,18 +938,9 @@ TEST_P(BumpTest, DISABLED_ABumpableCrowdIsPushedAsideAndComesBack)
 {
 	TestGameMap live { GetParam() };
 	Actor* pc = PcOf(live);
-	ASSERT_NE(pc, nullptr);
-	pc->SetBase(IE_EA, EA_PC);
-
 	std::vector<Point> home;
-	std::vector<Actor*> crowd = CrowdOf(live, home);
-	ASSERT_EQ(crowd.size(), size_t(5));
-	for (Actor* npc : crowd) npc->SetBase(IE_EA, EA_NEUTRAL);
+	std::vector<Actor*> crowd = CrowdOf(live, home, 5, EA_NEUTRAL);
 
-	ASSERT_TRUE(pc->ValidTarget(GA_CAN_BUMP)) << "the walker has to be allowed to bump";
-	for (Actor* npc : crowd) {
-		ASSERT_TRUE(npc->ValidTarget(GA_ONLY_BUMPABLE)) << "the crowd has to be bumpable for this run";
-	}
 	// without this the walker would not be walking into anybody at all
 	ASSERT_TRUE(bool(live.Drawing().At(pcX, pcY - 1) & PathMapFlags::ACTOR)) << "the crowd has to block the searchmap";
 
@@ -1005,18 +972,9 @@ TEST_P(BumpTest, ASolidCrowdIsWalkedAroundWithoutMoving)
 {
 	TestGameMap live { GetParam() };
 	Actor* pc = PcOf(live);
-	ASSERT_NE(pc, nullptr);
-	pc->SetBase(IE_EA, EA_PC);
-
 	std::vector<Point> home;
-	std::vector<Actor*> crowd = CrowdOf(live, home);
-	ASSERT_EQ(crowd.size(), size_t(5));
-	for (Actor* npc : crowd) npc->SetBase(IE_EA, EA_EVILCUTOFF);
+	std::vector<Actor*> crowd = CrowdOf(live, home, 5, EA_EVILCUTOFF);
 
-	ASSERT_TRUE(pc->ValidTarget(GA_CAN_BUMP)) << "this run turns off bumping on the crowd, not the walker";
-	for (Actor* npc : crowd) {
-		ASSERT_FALSE(npc->ValidTarget(GA_ONLY_BUMPABLE)) << "the crowd has to be solid for this run";
-	}
 	ASSERT_TRUE(bool(live.Drawing().At(pcX, pcY - 1) & PathMapFlags::ACTOR)) << "the crowd has to block the searchmap";
 	// the scenario is only a detour if a path around the crowd exists
 	const Point goal = live.Drawing().End();
