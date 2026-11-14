@@ -419,29 +419,9 @@ void Movable::DoStep(unsigned int walkScale, ieDword time)
 		actor->SetModal(Modal::None);
 	}
 
-	Actor* actorInTheWay = nullptr;
-	// We can't use GetActorInRadius because we want to only check directly along the way
-	// and not be blocked by actors who are on the sides
-	int collisionLookaheadRadius = ((circleSize < 3 ? 3 : circleSize) - 1) * 3;
-	// On the final leg don't look past its end: the path stops there, so whatever lies beyond is
-	// not in the way. Approaching an actor (a touch spell, a melee attack) the pathfinder ends the
-	// path just outside the target's circle, and an unclamped lookahead would find the target
-	// itself and stop the walk short of the range the caller asked for
-	if (path.currentStep + 1 >= path.Size()) {
-		const float_t stepLength = std::hypotf(dx, dy);
-		const float_t legLeft = std::hypotf(remainingX, remainingY);
-		if (stepLength > 0) {
-			collisionLookaheadRadius = std::min(collisionLookaheadRadius, static_cast<int>(legLeft / stepLength));
-		}
-	}
-	for (int r = collisionLookaheadRadius; r > 0; r--) {
-		auto xCollision = Pos.x + dx * r;
-		auto yCollision = Pos.y + dy * r; // NormalizeDeltas already adjusted dy for perspective
-		Point nmptCollision(xCollision, yCollision);
-		actorInTheWay = area->GetActor(nmptCollision, GA_NO_DEAD | GA_NO_UNSCHEDULED | GA_NO_SELF, this);
-		if (actorInTheWay) break;
-	}
-
+	// check if anyone is blocking the position where we want to move to
+	Point nextPos(Pos.x + moveX, Pos.y + moveY);
+	Actor* actorInTheWay = area->GetActor(nextPos, GA_NO_DEAD | GA_NO_UNSCHEDULED | GA_NO_SELF, this);
 	bool blocksSearch = BlocksSearchMap();
 	if (actorInTheWay && blocksSearch && actorInTheWay->BlocksSearchMap()) {
 		// Give up instead of bumping if you are close to the goal
@@ -465,10 +445,10 @@ void Movable::DoStep(unsigned int walkScale, ieDword time)
 		if (lastNode && withinRequestedRange && nearStep) {
 			LogDebugPathfinder("Movable::DoStep", "{}: NEAR-GOAL ABANDON at Pos={} step={} dest={} pathSize={} "
 							      "distToDest={} requestedDist={} (withinRequested={}) stepPersonalDist={} <= cutoff={:.1f} "
-							      "myRadius={} lookahead={} blocker={} at {} blockerRadius={} rawDistToBlocker={}",
+							      "myRadius={} blocker={} at {} blockerRadius={} rawDistToBlocker={}",
 					   MoveTag(this), Pos, nmptStep, Destination, path.Size(),
 					   distToDest, requestedGoalDistance, withinRequestedRange, stepPersonalDist, nearGoalCutoff,
-					   actor ? actor->CircleSize2Radius() * 4 : 0, collisionLookaheadRadius,
+					   actor ? actor->CircleSize2Radius() * 4 : 0,
 					   actorInTheWay->GetScriptName(), actorInTheWay->Pos, actorInTheWay->CircleSize2Radius() * 4,
 					   Distance(actorInTheWay, this));
 			ClearPath(true);
@@ -530,7 +510,7 @@ void Movable::DoStep(unsigned int walkScale, ieDword time)
 	if (InternalFlags & IF_RUNNING) {
 		SetStanceDirect(IE_ANI_RUN);
 	}
-	SetPos(NavmapPoint(Pos.x + moveX, Pos.y + moveY));
+	SetPos(nextPos);
 	oldPos = Pos;
 	if (actor && blocksSearch) {
 		auto flag = actor->IsInExtendedParty() ? PathMapFlags::PC : PathMapFlags::NPC;
